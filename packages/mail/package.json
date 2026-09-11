@@ -1,0 +1,20 @@
+{
+  "name": "@getficksd/mail",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@getficksd/env": "workspace:*",
+    "nodemailer": "^10.0.1"
+  },
+  "devDependencies": {
+    "@getficksd/config": "workspace:*",
+    "@types/nodemailer": "^8.0.1",
+    "typescript": "catalog:"
+  }
+}

@@ -1,0 +1,9 @@
+name: getficksd-dev
+
+services:
+  smtp:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"

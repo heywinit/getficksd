@@ -1,0 +1,30 @@
+{
+  "name": "@getficksd/api",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@getficksd/auth": "workspace:*",
+    "@getficksd/db": "workspace:*",
+    "@getficksd/env": "workspace:*",
+    "@getficksd/storage": "workspace:*",
+    "@trpc/client": "catalog:",
+    "@trpc/server": "catalog:",
+    "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.2",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@getficksd/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}
