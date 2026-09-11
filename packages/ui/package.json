@@ -21,7 +21,6 @@
     "cn": "^0.2.4",
     "echarts": "^6.1.0",
     "lucide-react": "catalog:",
-    "maplibre-gl": "^6",
     "motion": "^13.2.0",
     "next-themes": "catalog:",
     "react": "catalog:",

@@ -16,32 +16,19 @@ function HomeComponent() {
         <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,var(--color-primary)/0.12,transparent_42%)]" />
         <div className="mx-auto flex min-h-[calc(100svh-3.5rem)] max-w-5xl flex-col items-center justify-center px-4 py-20 text-center sm:px-6">
           <div className="mb-6 rounded-full border bg-background/80 px-3 py-1 text-xs text-muted-foreground shadow-sm">
-            Built for Hackout 26 at DA-IICT
+            No sign-in required
           </div>
           <h1 className="max-w-4xl text-balance text-4xl font-semibold tracking-tight sm:text-6xl">
-            Start building before the problem statement drops.
+            Explore Wattson as a grid operator.
           </h1>
           <p className="mt-6 max-w-2xl text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
-            A ready full-stack workspace for data, maps, authentication, realtime updates, and
-            machine-learning experiments.
+            Enter a seeded operator workspace. Switch accounts to inspect several different
+            community grids.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Button size="lg" render={<Link to="/dashboard" preload="intent" />}>
-              Open dashboard
+              Enter Wattson Demo
               <ArrowRightIcon />
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              render={
-                <a
-                  href="https://github.com/heywinit/getficksd"
-                  target="_blank"
-                  rel="noreferrer"
-                />
-              }
-            >
-              View GitHub
             </Button>
           </div>
         </div>

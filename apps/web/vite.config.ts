@@ -7,12 +7,6 @@ export default defineConfig({
   server: {
     port: 3001,
   },
-  build: {
-    rollupOptions: {
-      // resolved by workerd at runtime; node builds cannot bundle it
-      external: ["cloudflare:workers"],
-    },
-  },
   resolve: {
     tsconfigPaths: true,
   },

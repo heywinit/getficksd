@@ -9,46 +9,27 @@
     "dev:bare": "vp dev"
   },
   "dependencies": {
-    "@getficksd/api": "workspace:*",
-    "@getficksd/auth": "workspace:*",
-    "@getficksd/env": "workspace:*",
     "@getficksd/ui": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
-    "@tanstack/react-form": "^1.33.2",
     "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-router": "^1.170.18",
     "@tanstack/react-router-ssr-query": "^1.167.1",
     "@tanstack/react-start": "^1.168.32",
-    "@trpc/client": "catalog:",
-    "@trpc/server": "catalog:",
-    "@trpc/tanstack-react-query": "^11.18.0",
-    "better-auth": "catalog:",
-    "dotenv": "catalog:",
     "echarts": "^6.1.0",
     "lucide-react": "catalog:",
     "motion": "^13.2.0",
     "next-themes": "catalog:",
-    "papaparse": "^5.7.0",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "read-excel-file": "^9.3.10",
     "sonner": "catalog:",
-    "tailwindcss": "catalog:",
-    "zod": "catalog:"
+    "tailwindcss": "catalog:"
   },
   "devDependencies": {
     "@getficksd/config": "workspace:*",
-    "@tanstack/react-query-devtools": "^5.101.4",
-    "@tanstack/react-router-devtools": "^1.167.0",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/react": "^16.3.2",
-    "@types/papaparse": "^5.5.2",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "^6.0.4",
-    "jsdom": "^30.0.0",
     "typescript": "catalog:",
-    "vite": "^8.1.5",
-    "web-vitals": "^6.0.1"
+    "vite": "^8.1.5"
   }
 }

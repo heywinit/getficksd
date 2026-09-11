@@ -6,6 +6,7 @@ node_modules
 # Build outputs
 dist
 build
+wattson-backend
 *.tsbuildinfo
 
 # Generated files
@@ -59,6 +60,7 @@ __pycache__
 *.py[cod]
 
 # Misc
+.template-archive/
 *.tgz
 .cache
 tmp

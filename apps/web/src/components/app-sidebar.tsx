@@ -3,38 +3,43 @@
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
   SidebarRail,
 } from "@getficksd/ui/components/sidebar";
+import { Link } from "@tanstack/react-router";
+import { ZapIcon } from "lucide-react";
 import type * as React from "react";
 
 import { NavMain, type NavigationSection } from "@/components/nav-main";
-import { NavUser } from "@/components/nav-user";
-import { WorkspaceSwitcher } from "@/components/workspace-switcher";
+import { OperatorSwitcher } from "@/components/operator-switcher";
 import { appNavigation } from "@/lib/navigation";
 
 type AppSidebarProps = React.ComponentProps<typeof Sidebar> & {
-  user: {
-    name: string;
-    email: string;
-    image?: string | null;
-  };
   navigation?: NavigationSection[];
 };
 
-export function AppSidebar({ user, navigation = appNavigation, ...props }: AppSidebarProps) {
+export function AppSidebar({ navigation = appNavigation, ...props }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <WorkspaceSwitcher />
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" render={<Link to="/" />} tooltip="Wattson">
+              <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
+                <ZapIcon className="size-4" />
+              </span>
+              <span className="font-semibold tracking-tight">Wattson</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <OperatorSwitcher />
       </SidebarHeader>
       <SidebarContent>
         <NavMain sections={navigation} />
       </SidebarContent>
-      <SidebarFooter>
-        <NavUser user={user} />
-      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );
