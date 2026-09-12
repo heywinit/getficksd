@@ -484,7 +484,7 @@ function ItemEditor({
                 sliderMax={maximumOutput}
                 step={1}
                 unit="kW"
-                onChange={(value) => setAsset("minimum_output_kw", value)}
+                onChange={(value) => setAsset("minimum_output_kw", Math.min(value, maximumOutput))}
               />
               <RangeNumberField
                 label="Maximum output"
@@ -493,7 +493,14 @@ function ItemEditor({
                 sliderMax={Math.max(500, maximumOutput)}
                 step={1}
                 unit="kW"
-                onChange={(value) => setAsset("maximum_output_kw", value)}
+                onChange={(value) =>
+                  update((next) => {
+                    const item = next.site.assets.find((candidate) => candidate.id === asset.id);
+                    if (!item) return;
+                    item.maximum_output_kw = value;
+                    item.minimum_output_kw = Math.min(item.minimum_output_kw ?? 0, value);
+                  })
+                }
               />
             </div>
           </section>
@@ -583,14 +590,39 @@ function ItemEditor({
               label="Capacity (kWh)"
               value={asset.capacity_kwh}
               min={0.01}
-              onChange={(value) => setAsset("capacity_kwh", value)}
+              onChange={(value) =>
+                update((next) => {
+                  const item = next.site.assets.find((candidate) => candidate.id === asset.id);
+                  const itemState = next.initial_state.assets.find(
+                    (candidate) => candidate.asset_id === asset.id,
+                  );
+                  if (!item) return;
+
+                  item.capacity_kwh = value;
+                  item.minimum_stored_energy_kwh = Math.min(
+                    item.minimum_stored_energy_kwh ?? 0,
+                    Math.max(0, value - 0.01),
+                  );
+                  reconcileBatteryLimits(next, item.id, itemState);
+                })
+              }
             />
             <NumberField
               label="Physical minimum (kWh)"
               value={asset.minimum_stored_energy_kwh}
               min={0}
-              max={asset.capacity_kwh}
-              onChange={(value) => setAsset("minimum_stored_energy_kwh", value)}
+              max={Math.max(0, (asset.capacity_kwh ?? 0.01) - 0.01)}
+              onChange={(value) =>
+                update((next) => {
+                  const item = next.site.assets.find((candidate) => candidate.id === asset.id);
+                  if (!item) return;
+                  item.minimum_stored_energy_kwh = Math.min(
+                    value,
+                    Math.max(0, (item.capacity_kwh ?? 0.01) - 0.01),
+                  );
+                  reconcileBatteryLimits(next, item.id);
+                })
+              }
             />
             <NumberField
               label="Stored energy (kWh)"
@@ -602,7 +634,12 @@ function ItemEditor({
                   const item = next.initial_state.assets.find(
                     (candidate) => candidate.asset_id === asset.id,
                   );
-                  if (item) item.stored_energy_kwh = value;
+                  if (item) {
+                    item.stored_energy_kwh = Math.min(
+                      Math.max(value, asset.minimum_stored_energy_kwh ?? 0),
+                      asset.capacity_kwh ?? value,
+                    );
+                  }
                 })
               }
             />
@@ -679,11 +716,19 @@ function ItemEditor({
               const demand = next.signals.find((candidate) => candidate.id === signal?.id);
               if (demand) demand.values = demand.values.map((power) => Math.min(power, value));
               next.contracts.forEach((candidate) => {
-                if (
-                  candidate.service_id === service.id &&
-                  candidate.minimum_power_kw !== undefined
-                ) {
+                if (candidate.service_id !== service.id) return;
+                if (candidate.minimum_power_kw !== undefined) {
                   candidate.minimum_power_kw = Math.min(candidate.minimum_power_kw, value);
+                }
+                if (candidate.required_energy_kwh !== undefined) {
+                  const windowHours =
+                    (new Date(candidate.deadline).getTime() -
+                      new Date(candidate.window_start).getTime()) /
+                    3_600_000;
+                  candidate.required_energy_kwh = Math.min(
+                    candidate.required_energy_kwh,
+                    value * windowHours,
+                  );
                 }
               });
             })
@@ -752,6 +797,15 @@ function ItemEditor({
                 item.service_id = service.id;
                 if (item.minimum_power_kw !== undefined) {
                   item.minimum_power_kw = Math.min(item.minimum_power_kw, service.rated_power_kw);
+                }
+                if (item.required_energy_kwh !== undefined) {
+                  const windowHours =
+                    (new Date(item.deadline).getTime() - new Date(item.window_start).getTime()) /
+                    3_600_000;
+                  item.required_energy_kwh = Math.min(
+                    item.required_energy_kwh,
+                    service.rated_power_kw * windowHours,
+                  );
                 }
               })
             }
@@ -1016,6 +1070,37 @@ function fieldId(label: string) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
+function reconcileBatteryLimits(
+  scenario: Scenario,
+  assetId: string,
+  knownState?: Scenario["initial_state"]["assets"][number],
+) {
+  const asset = scenario.site.assets.find((candidate) => candidate.id === assetId);
+  if (!asset || asset.type !== "battery") return;
+
+  const capacity = asset.capacity_kwh ?? 0;
+  const minimum = asset.minimum_stored_energy_kwh ?? 0;
+  const state =
+    knownState ?? scenario.initial_state.assets.find((candidate) => candidate.asset_id === assetId);
+  if (state?.stored_energy_kwh !== undefined) {
+    state.stored_energy_kwh = Math.min(Math.max(state.stored_energy_kwh, minimum), capacity);
+  }
+
+  const limits = scenario.site.assets
+    .filter((candidate) => candidate.type === "battery")
+    .reduce(
+      (totals, candidate) => ({
+        capacity: totals.capacity + (candidate.capacity_kwh ?? 0),
+        minimum: totals.minimum + (candidate.minimum_stored_energy_kwh ?? 0),
+      }),
+      { capacity: 0, minimum: 0 },
+    );
+  scenario.operating_policy.reserve_energy_kwh = Math.min(
+    Math.max(scenario.operating_policy.reserve_energy_kwh, limits.minimum),
+    limits.capacity,
+  );
 }
 
 function addToScenario(scenario: Scenario, kind: AddKind) {

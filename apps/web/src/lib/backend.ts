@@ -177,9 +177,24 @@ async function requestJSON<T>(url: string, init: RequestInit, label: string): Pr
     const body = (await response.json().catch(() => null)) as {
       message?: string;
     } | null;
-    throw new Error(body?.message ?? `${label} returned ${response.status}.`);
+    throw new Error(
+      summarizeErrorMessage(body?.message ?? `${label} returned ${response.status}.`),
+    );
   }
   return response.json() as Promise<T>;
+}
+
+function summarizeErrorMessage(message: string) {
+  const problems = [
+    ...new Set(
+      message
+        .split(";")
+        .map((problem) => problem.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (problems.length <= 3) return problems.join("; ");
+  return `${problems.slice(0, 3).join("; ")}; and ${problems.length - 3} more validation errors.`;
 }
 
 function normalizePlanRun(run: PlanRun): PlanRun {

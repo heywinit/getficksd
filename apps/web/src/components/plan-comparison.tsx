@@ -120,7 +120,9 @@ export function PlanComparisonPanel({ scenario, run }: { scenario?: Scenario; ru
                 {formatDelta(metric.delta)}
               </p>
               <p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-                <span>{item.unit} · {formatNumber(metric.baseline)}</span>
+                <span>
+                  {item.unit} · {formatNumber(metric.baseline)}
+                </span>
                 <ArrowRightIcon className="size-2.5 shrink-0" aria-hidden="true" />
                 <span>{formatNumber(metric.candidate)}</span>
               </p>

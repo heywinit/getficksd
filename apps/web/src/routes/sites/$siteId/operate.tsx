@@ -259,7 +259,7 @@ function HomeComponent() {
       ) : null}
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 lg:px-10 xl:px-16 2xl:px-24">
         <section
-          className="relative h-[60svh] overflow-hidden rounded-xl border border-border bg-card"
+          className="relative h-[68svh] overflow-hidden rounded-xl border border-border bg-card"
           aria-label="Grid architecture"
         >
           <DeploymentCanvas

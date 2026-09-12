@@ -312,6 +312,15 @@ export type PlanRun = {
     total_emissions_kg_co2: number;
     minimum_battery_energy_kwh: number;
   };
+  optimization?: {
+    engine: string;
+    termination: string;
+    objective_value: number;
+    mip_gap: number;
+    solve_ms: number;
+    used_fallback: boolean;
+    fallback_reason?: string;
+  };
   comparison?: PlanComparison;
 };
 
