@@ -13,6 +13,10 @@ export const Route = createFileRoute("/api/backend/scenarios/$scenarioId")({
           headers: { "Content-Type": "application/json" },
           body: await request.text(),
         }),
+      DELETE: async ({ params, request }) =>
+        forwardBackendJSON(request, `/v1/scenarios/${encodeURIComponent(params.scenarioId)}`, {
+          method: "DELETE",
+        }),
     },
   },
 });

@@ -307,6 +307,12 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
   const serviceDemand = interval
     ? interval.services.reduce((total, item) => total + item.requested_kw, 0)
     : signalValue(scenario, "service_demand", index);
+  const servedPower = interval
+    ? interval.services.reduce((total, item) => total + item.delivered_kw, 0)
+    : serviceDemand;
+  const deferredPower = interval
+    ? interval.services.reduce((total, item) => total + item.deferred_kw + item.unserved_kw, 0)
+    : 0;
   const renewableOutputByAsset = Object.fromEntries(
     (scenario?.site.assets ?? [])
       .filter((asset) => asset.type === "solar" || asset.type === "wind")
@@ -387,6 +393,8 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
     ),
     windKw: round(windOutput ?? signalValue(scenario, "renewable_availability", index, wind?.id)),
     demandKw: round(serviceDemand),
+    servedKw: round(servedPower),
+    deferredKw: round(deferredPower),
     batteryPercent: batteryCapacity > 0 ? Math.round((batteryEnergy / batteryCapacity) * 100) : 0,
     batteryEnergyKwh: round(batteryEnergy),
     batteryCapacityKwh: round(batteryCapacity),

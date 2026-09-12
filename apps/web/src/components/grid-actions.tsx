@@ -31,7 +31,7 @@ import {
   SunIcon,
   WindIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { updateScenario } from "@/lib/backend";
@@ -39,7 +39,7 @@ import type { Scenario } from "@/lib/plan-run";
 
 type AddKind = "battery" | "consumer" | "contract" | "diesel" | "event" | "solar" | "wind";
 type Asset = Scenario["site"]["assets"][number];
-type EditTarget =
+export type GridEditTarget =
   | { kind: "asset"; id: string }
   | { kind: "contract"; id: string }
   | { kind: "event"; id: string }
@@ -78,14 +78,18 @@ export function GridActions({
   hasRun,
   isPlanning,
   onPlan,
+  editRequest,
+  onEditRequestHandled,
 }: {
   scenario?: Scenario;
   hasRun: boolean;
   isPlanning: boolean;
   onPlan: () => void;
+  editRequest?: GridEditTarget | null;
+  onEditRequestHandled?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [editTarget, setEditTarget] = useState<GridEditTarget | null>(null);
   const [editDraft, setEditDraft] = useState<Scenario | null>(null);
   const addMutation = useMutation({
     mutationFn: async (kind: AddKind) => {
@@ -117,11 +121,18 @@ export function GridActions({
   });
   const disabled = !scenario || addMutation.isPending || editMutation.isPending;
 
-  function startEdit(target: EditTarget) {
+  function startEdit(target: GridEditTarget) {
     if (!scenario) return;
     setEditDraft(structuredClone(scenario));
     setEditTarget(target);
   }
+
+  useEffect(() => {
+    if (!editRequest || !scenario) return;
+    setEditDraft(structuredClone(scenario));
+    setEditTarget(editRequest);
+    onEditRequestHandled?.();
+  }, [editRequest, onEditRequestHandled, scenario]);
 
   return (
     <div className="absolute left-4 top-4 z-30 flex items-center gap-2">
@@ -248,7 +259,7 @@ function EditMenu({
   onEdit,
 }: {
   scenario?: Scenario;
-  onEdit: (target: EditTarget) => void;
+  onEdit: (target: GridEditTarget) => void;
 }) {
   if (!scenario) return null;
   const groups = [
@@ -311,7 +322,7 @@ function ItemEditor({
   onChange,
 }: {
   scenario: Scenario;
-  target: EditTarget;
+  target: GridEditTarget;
   onChange: (scenario: Scenario) => void;
 }) {
   const update = (change: (next: Scenario) => void) => {
@@ -375,6 +386,13 @@ function ItemEditor({
               onChange={(value) => setAsset("capacity_kwh", value)}
             />
             <NumberField
+              label="Physical minimum (kWh)"
+              value={asset.minimum_stored_energy_kwh}
+              min={0}
+              max={asset.capacity_kwh}
+              onChange={(value) => setAsset("minimum_stored_energy_kwh", value)}
+            />
+            <NumberField
               label="Stored energy (kWh)"
               value={state?.stored_energy_kwh}
               min={0}
@@ -388,10 +406,45 @@ function ItemEditor({
                 })
               }
             />
+            <NumberField
+              label="Maximum charge (kW)"
+              value={asset.max_charge_kw}
+              min={0.01}
+              onChange={(value) => setAsset("max_charge_kw", value)}
+            />
+            <NumberField
+              label="Maximum discharge (kW)"
+              value={asset.max_discharge_kw}
+              min={0.01}
+              onChange={(value) => setAsset("max_discharge_kw", value)}
+            />
+            <NumberField
+              label="Charge efficiency"
+              value={asset.charge_efficiency}
+              min={0.01}
+              max={1}
+              step={0.01}
+              onChange={(value) => setAsset("charge_efficiency", value)}
+            />
+            <NumberField
+              label="Discharge efficiency"
+              value={asset.discharge_efficiency}
+              min={0.01}
+              max={1}
+              step={0.01}
+              onChange={(value) => setAsset("discharge_efficiency", value)}
+            />
           </>
         ) : null}
         {asset.type === "diesel" ? (
           <>
+            <NumberField
+              label="Minimum stable output (kW)"
+              value={asset.minimum_output_kw}
+              min={0}
+              max={asset.maximum_output_kw}
+              onChange={(value) => setAsset("minimum_output_kw", value)}
+            />
             <NumberField
               label="Maximum output (kW)"
               value={asset.maximum_output_kw}
@@ -410,6 +463,48 @@ function ItemEditor({
                   if (item) item.fuel_available_liters = value;
                 })
               }
+            />
+            <NumberField
+              label="Fuel use (liters/kWh)"
+              value={asset.liters_per_kwh}
+              min={0.001}
+              step={0.001}
+              onChange={(value) => setAsset("liters_per_kwh", value)}
+            />
+            <NumberField
+              label="Startup fuel (liters)"
+              value={asset.startup_fuel_liters}
+              min={0}
+              step={0.1}
+              onChange={(value) => setAsset("startup_fuel_liters", value)}
+            />
+            <NumberField
+              label="Minimum runtime (minutes)"
+              value={asset.minimum_runtime_minutes}
+              min={0}
+              step={15}
+              onChange={(value) => setAsset("minimum_runtime_minutes", Math.round(value))}
+            />
+            <NumberField
+              label="Ramp rate (kW/min)"
+              value={asset.ramp_rate_kw_per_minute}
+              min={0.01}
+              step={0.1}
+              onChange={(value) => setAsset("ramp_rate_kw_per_minute", value)}
+            />
+            <NumberField
+              label={`Fuel cost (${scenario.site.currency}/liter)`}
+              value={asset.fuel_cost_per_liter}
+              min={0}
+              step={0.01}
+              onChange={(value) => setAsset("fuel_cost_per_liter", value)}
+            />
+            <NumberField
+              label="Emissions (kg CO₂/liter)"
+              value={asset.emissions_kg_co2_per_liter}
+              min={0.01}
+              step={0.01}
+              onChange={(value) => setAsset("emissions_kg_co2_per_liter", value)}
             />
           </>
         ) : null}
@@ -705,7 +800,7 @@ function MissingItem() {
   return <p className="text-sm text-destructive">This item no longer exists.</p>;
 }
 
-function targetLabel(kind: EditTarget["kind"]) {
+function targetLabel(kind: GridEditTarget["kind"]) {
   return kind === "service" ? "consumer" : kind;
 }
 
@@ -760,7 +855,10 @@ function addAsset(scenario: Scenario, type: Asset["type"]) {
             minimum_output_kw: 0,
             maximum_output_kw: 20,
             liters_per_kwh: 0.3,
-            fuel_cost_per_liter: 1,
+            startup_fuel_liters: 0.5,
+            minimum_runtime_minutes: 30,
+            ramp_rate_kw_per_minute: 2,
+            fuel_cost_per_liter: scenario.site.currency === "INR" ? 95 : 1,
             emissions_kg_co2_per_liter: 2.68,
           };
   scenario.site.assets.push(asset);
@@ -770,6 +868,13 @@ function addAsset(scenario: Scenario, type: Asset["type"]) {
       type,
       stored_energy_kwh: 10,
     });
+    const physicalMinimum = scenario.site.assets
+      .filter((candidate) => candidate.type === "battery")
+      .reduce((total, candidate) => total + (candidate.minimum_stored_energy_kwh ?? 0), 0);
+    scenario.operating_policy.reserve_energy_kwh = Math.max(
+      scenario.operating_policy.reserve_energy_kwh,
+      physicalMinimum,
+    );
   }
   if (type === "diesel") {
     scenario.initial_state.assets.push({

@@ -41,14 +41,32 @@ const analyticsConfig = {
   },
 } satisfies ChartConfig;
 
-export function OperationsAnalytics({ scenario, run }: { scenario?: Scenario; run?: PlanRun }) {
+export function OperationsAnalytics({
+  scenario,
+  run,
+  currentHour = 0,
+}: {
+  scenario?: Scenario;
+  run?: PlanRun;
+  currentHour?: number;
+}) {
   const data = useMemo(() => createAnalyticsData(scenario, run), [run, scenario]);
-  const metrics = useMemo(() => summarizeAnalytics(data, scenario, run), [data, run, scenario]);
+  const currentIndex =
+    data.length > 0 ? clamp(Math.floor((currentHour / 24) * data.length), 0, data.length - 1) : 0;
+  const visibleData = useMemo(
+    () => (run ? data.slice(0, currentIndex + 1) : data),
+    [currentIndex, data, run],
+  );
+  const metrics = useMemo(
+    () => summarizeAnalytics(data, currentIndex, scenario),
+    [currentIndex, data, scenario],
+  );
   const isLoading = !scenario;
+  const currentTime = data[currentIndex]?.time;
 
   return (
     <section
-      className="px-16 pb-8 pt-6 sm:px-24 lg:px-40 xl:px-48 2xl:px-64"
+      className="px-16 pb-8 pt-10 sm:px-24 lg:px-40 xl:px-48 2xl:px-64"
       aria-labelledby="analytics-title"
     >
       <header className="mb-3">
@@ -57,6 +75,7 @@ export function OperationsAnalytics({ scenario, run }: { scenario?: Scenario; ru
         </h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {run ? "Scheduled operation" : "Forecast operation"}
+          {currentTime ? ` · ${currentTime}` : ""}
         </p>
       </header>
 
@@ -64,9 +83,9 @@ export function OperationsAnalytics({ scenario, run }: { scenario?: Scenario; ru
         <AnalyticsCard
           className="md:col-span-2 xl:col-span-1"
           title="Power balance"
-          metric={formatMetric(metrics.peakDemand)}
-          unit="kW peak demand"
-          data={data}
+          metric={formatMetric(metrics.deliveredKw)}
+          unit={`of ${formatMetric(metrics.demandKw)} kW served`}
+          data={visibleData}
           series={["demandKw", "deliveredKw"]}
           axisUnit="kW"
           showAxis
@@ -75,8 +94,8 @@ export function OperationsAnalytics({ scenario, run }: { scenario?: Scenario; ru
         <AnalyticsCard
           title="Unserved energy"
           metric={formatMetric(metrics.unservedEnergy, 1)}
-          unit="kWh"
-          data={data}
+          unit="kWh so far"
+          data={visibleData}
           series={["unservedKw"]}
           axisUnit="kW"
           isLoading={isLoading}
@@ -84,9 +103,9 @@ export function OperationsAnalytics({ scenario, run }: { scenario?: Scenario; ru
         />
         <AnalyticsCard
           title="Battery reserve"
-          metric={formatMetric(metrics.minimumBattery)}
-          unit="kWh minimum"
-          data={data}
+          metric={formatMetric(metrics.batteryKwh)}
+          unit="kWh now"
+          data={visibleData}
           series={["batteryKwh"]}
           axisUnit="kWh"
           isLoading={isLoading}
@@ -206,15 +225,16 @@ function createAnalyticsData(scenario?: Scenario, run?: PlanRun): AnalyticsDatum
   });
 }
 
-function summarizeAnalytics(data: AnalyticsDatum[], scenario?: Scenario, run?: PlanRun) {
+function summarizeAnalytics(data: AnalyticsDatum[], currentIndex: number, scenario?: Scenario) {
+  const current = data[currentIndex];
+  const elapsed = data.slice(0, currentIndex + 1);
+
   return {
-    peakDemand: Math.max(0, ...data.map((row) => row.demandKw)),
+    demandKw: current?.demandKw ?? 0,
+    deliveredKw: current?.deliveredKw ?? 0,
     unservedEnergy:
-      run?.summary.unserved_energy_kwh ??
-      sum(data.map((row) => row.unservedKw)) * ((scenario?.horizon.interval_minutes ?? 0) / 60),
-    minimumBattery:
-      run?.summary.minimum_battery_energy_kwh ??
-      (data.length > 0 ? Math.min(...data.map((row) => row.batteryKwh)) : 0),
+      sum(elapsed.map((row) => row.unservedKw)) * ((scenario?.horizon.interval_minutes ?? 0) / 60),
+    batteryKwh: current?.batteryKwh ?? 0,
   };
 }
 
@@ -230,6 +250,10 @@ function sum(values: number[]) {
 
 function round(value: number) {
   return Math.round(value * 10) / 10;
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function formatMetric(value: number, maximumFractionDigits = 0) {

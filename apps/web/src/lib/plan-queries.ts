@@ -1,6 +1,13 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { getPlanRun, getPlanRuns, getScenario } from "@/lib/backend";
+import { getPlanRun, getPlanRuns, getScenario, getScenarios } from "@/lib/backend";
+
+export function scenariosQueryOptions() {
+  return queryOptions({
+    queryKey: ["scenarios"],
+    queryFn: ({ signal }) => getScenarios(signal),
+  });
+}
 
 export function scenarioQueryOptions(scenarioId: string) {
   return queryOptions({

@@ -1,23 +1,49 @@
 import { Button } from "@getficksd/ui/components/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@getficksd/ui/components/context-menu";
+import {
   BatteryChargingIcon,
   CrossIcon,
   DropletsIcon,
   FuelIcon,
   GaugeIcon,
+  GraduationCapIcon,
   HomeIcon,
+  LightbulbIcon,
+  Link2Icon,
   LocateFixedIcon,
   MinusIcon,
+  PencilIcon,
   PlusIcon,
+  RadioTowerIcon,
   RotateCcwIcon,
+  SnowflakeIcon,
+  StoreIcon,
   SunIcon,
+  Trash2Icon,
   WindIcon,
+  XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type PointerEvent,
+  type SetStateAction,
+} from "react";
+import { toast } from "sonner";
 
 import { operatingStateAt, TimeRail } from "@/components/time-rail";
-import type { PlanRun, Scenario } from "@/lib/plan-run";
+import type { GridConnection, PlanRun, Scenario } from "@/lib/plan-run";
 
 const GRID_SIZE = 16;
 const WORLD_WIDTH = 1480;
@@ -26,6 +52,7 @@ const MIN_SCALE = 0.3;
 const MAX_SCALE = 2;
 
 export type CanvasView = "activity" | "architecture" | "forecast";
+export type CanvasResourceTarget = { kind: "asset" | "service"; id: string };
 
 type CanvasNode = {
   id: string;
@@ -51,6 +78,13 @@ type CanvasTransform = {
   x: number;
   y: number;
   scale: number;
+};
+
+type ConnectionDraft = {
+  sourceId: string;
+  pointerId?: number;
+  x?: number;
+  y?: number;
 };
 
 type DragState =
@@ -107,7 +141,7 @@ const initialNodes: CanvasNode[] = [
     iconClassName: "bg-chart-3/15 text-chart-3",
     width: 292,
     height: 164,
-    x: 408,
+    x: 376,
     y: 136,
   },
   {
@@ -120,7 +154,7 @@ const initialNodes: CanvasNode[] = [
     iconClassName: "bg-chart-4/15 text-chart-4",
     width: 296,
     height: 184,
-    x: 432,
+    x: 392,
     y: 432,
   },
   {
@@ -178,7 +212,7 @@ const initialNodes: CanvasNode[] = [
 ];
 
 function createCanvasNodes(scenario?: Scenario): CanvasNode[] {
-  if (!scenario) return initialNodes;
+  if (!scenario) return [];
 
   const assetTemplates: Record<NonNullable<CanvasNode["assetType"]>, CanvasNode> = {
     solar: initialNodes[0],
@@ -192,9 +226,7 @@ function createCanvasNodes(scenario?: Scenario): CanvasNode[] {
     curtailable: initialNodes[7],
   };
   const typeCounts = new Map<CanvasNode["assetType"], number>();
-  const modeCounts = new Map<CanvasNode["serviceMode"], number>();
   let extraAssetCount = 0;
-  let extraServiceCount = 0;
   const assets = scenario.site.assets.map((asset) => {
     const index = typeCounts.get(asset.type) ?? 0;
     typeCounts.set(asset.type, index + 1);
@@ -218,18 +250,23 @@ function createCanvasNodes(scenario?: Scenario): CanvasNode[] {
   });
   const controller = {
     ...initialNodes[4],
+    width: 288,
+    height: 184,
+    x: 720,
+    y: 248,
     id: "controller",
     kind: "controller" as const,
     detail: scenario.site.name,
   };
-  const services = scenario.site.services.map((service) => {
-    const index = modeCounts.get(service.control_mode) ?? 0;
-    modeCounts.set(service.control_mode, index + 1);
+  const services = scenario.site.services.map((service, index) => {
     const template = serviceTemplates[service.control_mode];
-    const position = index === 0 ? template : extraServicePosition(extraServiceCount++);
+    const position = serviceGridPosition(index, scenario.site.services.length);
+    const presentation = servicePresentation(service);
     return {
       ...template,
       ...position,
+      width: 224,
+      height: 136,
       id: `service:${service.id}`,
       kind: "service" as const,
       resourceId: service.id,
@@ -237,33 +274,66 @@ function createCanvasNodes(scenario?: Scenario): CanvasNode[] {
       title: service.name,
       detail: service.description || `${service.control_mode} service`,
       metric: `${service.rated_power_kw} kW rated`,
+      icon: presentation.icon,
+      iconClassName: presentation.iconClassName,
     };
   });
   return [...assets, controller, ...services];
+}
+
+function servicePresentation(service: Scenario["site"]["services"][number]) {
+  const name = `${service.id} ${service.name}`.toLowerCase();
+  if (name.includes("health") || name.includes("clinic")) {
+    return { icon: CrossIcon, iconClassName: "bg-destructive/15 text-destructive" };
+  }
+  if (name.includes("water") || name.includes("pump")) {
+    return { icon: DropletsIcon, iconClassName: "bg-chart-2/15 text-chart-2" };
+  }
+  if (name.includes("telecom") || name.includes("radio")) {
+    return { icon: RadioTowerIcon, iconClassName: "bg-chart-3/15 text-chart-3" };
+  }
+  if (name.includes("school") || name.includes("community center")) {
+    return { icon: GraduationCapIcon, iconClassName: "bg-chart-1/15 text-chart-1" };
+  }
+  if (name.includes("shop") || name.includes("business") || name.includes("workshop")) {
+    return { icon: StoreIcon, iconClassName: "bg-chart-4/15 text-chart-4" };
+  }
+  if (name.includes("light")) {
+    return { icon: LightbulbIcon, iconClassName: "bg-chart-1/15 text-chart-1" };
+  }
+  if (name.includes("cold") || name.includes("storage")) {
+    return { icon: SnowflakeIcon, iconClassName: "bg-chart-2/15 text-chart-2" };
+  }
+  return { icon: HomeIcon, iconClassName: "bg-chart-5/15 text-chart-5" };
 }
 
 function extraAssetPosition(index: number) {
   return { x: 64 + (index % 3) * 312, y: 704 + Math.floor(index / 3) * 208 };
 }
 
-function extraServicePosition(index: number) {
-  return { x: 1040 + (index % 2) * 236, y: 704 + Math.floor(index / 2) * 192 };
+function serviceGridPosition(index: number, serviceCount: number) {
+  const columns = Math.max(1, Math.ceil(serviceCount / 4));
+  const rows = Math.ceil(serviceCount / columns);
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const cardHeight = 136;
+  const rowGap = 28;
+  const gridHeight = rows * cardHeight + Math.max(0, rows - 1) * rowGap;
+  return {
+    x: 1048 + column * 256,
+    y: Math.max(32, Math.round((WORLD_HEIGHT - gridHeight) / 2)) + row * (cardHeight + rowGap),
+  };
 }
 
-function canvasConnections(nodes: CanvasNode[]): Array<[string, string]> {
-  const controller = nodes.find((node) => node.kind === "controller" || node.id === "controller");
-  if (!controller) return [];
-  return nodes.flatMap((node): Array<[string, string]> => {
-    if (node.id === controller.id) return [];
-    return node.kind === "service" ? [[controller.id, node.id]] : [[node.id, controller.id]];
-  });
+function endpointNodeLookup(nodes: CanvasNode[]) {
+  return new Map(nodes.map((node) => [node.resourceId ?? node.id, node]));
 }
 
 function worldSize(nodes: CanvasNode[]) {
   return nodes.reduce(
     (size, node) => ({
-      width: Math.max(size.width, node.x + node.width + 48),
-      height: Math.max(size.height, node.y + node.height + 48),
+      width: Math.max(size.width, node.x + node.width + 32),
+      height: Math.max(size.height, node.y + node.height + 32),
     }),
     { width: WORLD_WIDTH, height: WORLD_HEIGHT },
   );
@@ -274,11 +344,29 @@ export function DeploymentCanvas({
   scenario,
   run,
   onViewChange,
+  onEditResource,
+  onRemoveResource,
+  onConnectionsChange,
+  connectionsUpdating = false,
+  playing,
+  replayToken = 0,
+  onPlayingChange,
+  currentHour: controlledCurrentHour,
+  onCurrentHourChange: setControlledCurrentHour,
 }: {
   view?: CanvasView;
   scenario?: Scenario;
   run?: PlanRun;
   onViewChange?: (view: CanvasView) => void;
+  onEditResource?: (target: CanvasResourceTarget) => void;
+  onRemoveResource?: (target: CanvasResourceTarget) => void;
+  onConnectionsChange?: (connections: GridConnection[]) => void;
+  connectionsUpdating?: boolean;
+  playing?: boolean;
+  replayToken?: number;
+  onPlayingChange?: (playing: boolean) => void;
+  currentHour?: number;
+  onCurrentHourChange?: Dispatch<SetStateAction<number>>;
 }) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState(() => createCanvasNodes(scenario));
@@ -289,9 +377,15 @@ export function DeploymentCanvas({
   });
   const [drag, setDrag] = useState<DragState | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>("controller");
+  const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
+  const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(false);
-  const [currentHour, setCurrentHour] = useState(10.5);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [internalCurrentHour, setInternalCurrentHour] = useState(10.5);
+  const currentHour = controlledCurrentHour ?? internalCurrentHour;
+  const setCurrentHour = setControlledCurrentHour ?? setInternalCurrentHour;
+  const [internalPlaying, setInternalPlaying] = useState(false);
+  const isPlaying = playing ?? internalPlaying;
+  const setIsPlaying = onPlayingChange ?? setInternalPlaying;
   const canvasSize = useMemo(() => worldSize(nodes), [nodes]);
 
   useEffect(() => {
@@ -303,7 +397,19 @@ export function DeploymentCanvas({
     setSelectedNode((current) =>
       nextNodes.some((node) => node.id === current) ? current : "controller",
     );
+    setSelectedConnection((current) =>
+      scenario?.site.connections?.some((connection) => connection.id === current) ? current : null,
+    );
+    setConnectionDraft((current) =>
+      current && nextNodes.some((node) => (node.resourceId ?? node.id) === current.sourceId)
+        ? current
+        : null,
+    );
   }, [scenario]);
+
+  useEffect(() => {
+    if (replayToken > 0) setCurrentHour(0);
+  }, [replayToken]);
 
   const fitView = useCallback(() => {
     const bounds = canvasRef.current?.getBoundingClientRect();
@@ -311,7 +417,7 @@ export function DeploymentCanvas({
 
     const availableHeight = bounds.height;
     const scale = clamp(
-      Math.min((bounds.width - 96) / canvasSize.width, (availableHeight - 64) / canvasSize.height),
+      Math.min((bounds.width - 32) / canvasSize.width, (availableHeight - 32) / canvasSize.height),
       MIN_SCALE,
       1,
     );
@@ -383,14 +489,14 @@ export function DeploymentCanvas({
     () => nodes.map((node) => applyCanvasView(applyOperatingState(node, operatingState), view)),
     [nodes, operatingState, view],
   );
-  const nodeLookup = useMemo(
-    () => new Map(sceneNodes.map((node) => [node.id, node])),
-    [sceneNodes],
-  );
+  const endpointLookup = useMemo(() => endpointNodeLookup(sceneNodes), [sceneNodes]);
+  const connections = scenario?.site.connections ?? [];
   const startCanvasDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    canvasRef.current?.setPointerCapture(event.pointerId);
+    event.currentTarget.setPointerCapture(event.pointerId);
     setSelectedNode(null);
+    setSelectedConnection(null);
+    setConnectionDraft(null);
     setDrag({
       type: "canvas",
       pointerId: event.pointerId,
@@ -407,7 +513,7 @@ export function DeploymentCanvas({
     const bounds = canvasRef.current?.getBoundingClientRect();
     if (!bounds) return;
 
-    canvasRef.current?.setPointerCapture(event.pointerId);
+    event.currentTarget.setPointerCapture(event.pointerId);
     const pointerX = (event.clientX - bounds.left - transform.x) / transform.scale;
     const pointerY = (event.clientY - bounds.top - transform.y) / transform.scale;
     setSelectedNode(node.id);
@@ -421,6 +527,11 @@ export function DeploymentCanvas({
   };
 
   const continueDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (connectionDraft?.pointerId === event.pointerId) {
+      const point = canvasPoint(event, canvasRef.current, transform);
+      if (point) setConnectionDraft((current) => (current ? { ...current, ...point } : current));
+      return;
+    }
     if (!drag || drag.pointerId !== event.pointerId) return;
 
     if (drag.type === "canvas") {
@@ -445,6 +556,17 @@ export function DeploymentCanvas({
   };
 
   const endDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (connectionDraft?.pointerId === event.pointerId) {
+      const target = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-connection-target]")?.dataset.connectionTarget;
+      if (target) completeConnection(target);
+      else setConnectionDraft((current) => (current ? { sourceId: current.sourceId } : null));
+      if (canvasRef.current?.hasPointerCapture(event.pointerId)) {
+        canvasRef.current.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
     if (!drag || drag.pointerId !== event.pointerId) return;
     if (canvasRef.current?.hasPointerCapture(event.pointerId)) {
       canvasRef.current.releasePointerCapture(event.pointerId);
@@ -471,6 +593,80 @@ export function DeploymentCanvas({
     setSelectedNode("controller");
     fitView();
   };
+
+  const startConnection = (event: PointerEvent<HTMLButtonElement>, sourceId: string) => {
+    if (connectionsUpdating) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = canvasPoint(event, canvasRef.current, transform);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag(null);
+    setSelectedNode(null);
+    setSelectedConnection(null);
+    setConnectionDraft({ sourceId, pointerId: event.pointerId, ...point });
+  };
+
+  const selectConnectionSource = (sourceId: string) => {
+    if (connectionsUpdating) return;
+    setDrag(null);
+    setSelectedNode(null);
+    setSelectedConnection(null);
+    setConnectionDraft({ sourceId });
+  };
+
+  const completeConnection = (targetId: string) => {
+    if (!connectionDraft || connectionsUpdating) return;
+    const problem = connectionProblem(
+      connectionDraft.sourceId,
+      targetId,
+      endpointLookup,
+      connections,
+    );
+    if (problem) {
+      toast.error(problem);
+      setConnectionDraft((current) => (current ? { sourceId: current.sourceId } : null));
+      return;
+    }
+    const connection: GridConnection = {
+      id: `${connectionDraft.sourceId}-to-${targetId}`,
+      source_id: connectionDraft.sourceId,
+      target_id: targetId,
+    };
+    onConnectionsChange?.([...connections, connection]);
+    setConnectionDraft(null);
+  };
+
+  const deleteConnection = (connectionId: string) => {
+    if (connectionsUpdating) return;
+    onConnectionsChange?.(connections.filter((connection) => connection.id !== connectionId));
+    setSelectedConnection(null);
+    setConnectionDraft(null);
+  };
+
+  useEffect(() => {
+    if (!selectedConnection && !connectionDraft) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (!selectedConnection) return;
+        event.preventDefault();
+        deleteConnection(selectedConnection);
+      }
+      if (event.key === "Escape") {
+        setSelectedConnection(null);
+        setConnectionDraft(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [connectionDraft, connections, connectionsUpdating, selectedConnection]);
 
   return (
     <div
@@ -526,10 +722,10 @@ export function DeploymentCanvas({
         }}
       >
         <svg
-          className="pointer-events-none absolute inset-0 overflow-visible"
+          className="absolute inset-0 overflow-visible"
           width={canvasSize.width}
           height={canvasSize.height}
-          aria-hidden="true"
+          aria-label="Grid connections"
         >
           <defs>
             <marker
@@ -544,9 +740,9 @@ export function DeploymentCanvas({
               <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--muted-foreground)" fillOpacity="0.8" />
             </marker>
           </defs>
-          {canvasConnections(sceneNodes).map(([fromId, toId]) => {
-            const from = nodeLookup.get(fromId);
-            const to = nodeLookup.get(toId);
+          {connections.map((connection) => {
+            const from = endpointLookup.get(connection.source_id);
+            const to = endpointLookup.get(connection.target_id);
             if (!from || !to) return null;
             const emphasized = connectionIsEmphasized(from, to, view);
             const dieselActive =
@@ -555,18 +751,73 @@ export function DeploymentCanvas({
                 from.resourceId && operatingState.generatorsByAsset[from.resourceId]?.running,
               );
             return (
-              <path
-                key={`${fromId}-${toId}`}
-                d={connectionPath(from, to)}
-                fill="none"
-                stroke={dieselActive ? "var(--chart-4)" : "var(--muted-foreground)"}
-                strokeOpacity={emphasized ? (dieselActive ? 1 : 0.7) : 0.12}
-                strokeWidth="1.5"
-                strokeDasharray={dieselActive ? undefined : "5 5"}
-                markerEnd="url(#canvas-arrow)"
-              />
+              <g key={connection.id}>
+                <path
+                  d={connectionPath(from, to)}
+                  fill="none"
+                  stroke={
+                    selectedConnection === connection.id
+                      ? "var(--primary)"
+                      : dieselActive
+                        ? "var(--chart-4)"
+                        : "var(--muted-foreground)"
+                  }
+                  strokeOpacity={
+                    selectedConnection === connection.id
+                      ? 1
+                      : emphasized
+                        ? dieselActive
+                          ? 1
+                          : 0.7
+                        : 0.12
+                  }
+                  strokeWidth={selectedConnection === connection.id ? 3 : 1.5}
+                  strokeDasharray={dieselActive ? undefined : "5 5"}
+                  markerEnd="url(#canvas-arrow)"
+                  pointerEvents="none"
+                />
+                <path
+                  d={connectionPath(from, to)}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth="18"
+                  style={{ pointerEvents: "stroke" }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select connection from ${from.title} to ${to.title}`}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    setSelectedNode(null);
+                    setSelectedConnection(connection.id);
+                    setConnectionDraft(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedConnection(connection.id);
+                    }
+                  }}
+                />
+              </g>
             );
           })}
+          {connectionDraft?.x !== undefined && connectionDraft.y !== undefined
+            ? (() => {
+                const from = endpointLookup.get(connectionDraft.sourceId);
+                if (!from) return null;
+                return (
+                  <path
+                    d={draftConnectionPath(from, connectionDraft.x, connectionDraft.y)}
+                    fill="none"
+                    stroke="var(--primary)"
+                    strokeWidth="2"
+                    strokeDasharray="6 4"
+                    markerEnd="url(#canvas-arrow)"
+                    pointerEvents="none"
+                  />
+                );
+              })()
+            : null}
         </svg>
 
         {sceneNodes.map((node) => (
@@ -580,9 +831,60 @@ export function DeploymentCanvas({
                 : 0
             }
             onPointerDown={(event) => startNodeDrag(event, node)}
+            onEdit={onEditResource}
+            onRemove={onRemoveResource}
+            connectionSource={connectionDraft?.sourceId}
+            connections={connections}
+            endpoints={endpointLookup}
+            updatingConnections={connectionsUpdating}
+            onStartConnection={startConnection}
+            onSelectConnectionSource={selectConnectionSource}
+            onCompleteConnection={completeConnection}
           />
         ))}
       </div>
+
+      {selectedConnection ? (
+        <div
+          className="absolute right-4 top-16 z-30 flex items-center gap-2 rounded-lg border border-border bg-popover/95 p-2 shadow-2xl backdrop-blur"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <span className="px-1 text-xs text-muted-foreground">Connection selected</span>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={connectionsUpdating}
+            onClick={() => deleteConnection(selectedConnection)}
+          >
+            <Trash2Icon />
+            {connectionsUpdating ? "Saving" : "Disconnect"}
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Clear connection selection"
+            onClick={() => setSelectedConnection(null)}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      ) : connectionDraft ? (
+        <div
+          className="absolute right-4 top-16 z-30 flex items-center gap-2 rounded-lg border border-primary/30 bg-popover/95 px-3 py-2 text-xs shadow-2xl backdrop-blur"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <Link2Icon className="size-4 text-primary" />
+          Select a highlighted input. Press Escape to cancel.
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Cancel connection"
+            onClick={() => setConnectionDraft(null)}
+          >
+            <XIcon />
+          </Button>
+        </div>
+      ) : null}
 
       <div className="absolute left-4 top-16 flex flex-col gap-2">
         <div className="flex flex-col rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur">
@@ -650,12 +952,31 @@ function ServiceCard({
   selected,
   dieselLitres,
   onPointerDown,
+  onEdit,
+  onRemove,
+  connectionSource,
+  connections,
+  endpoints,
+  updatingConnections,
+  onStartConnection,
+  onSelectConnectionSource,
+  onCompleteConnection,
 }: {
   node: CanvasNode;
   selected: boolean;
   dieselLitres: number;
   onPointerDown: (event: PointerEvent<HTMLElement>) => void;
+  onEdit?: (target: CanvasResourceTarget) => void;
+  onRemove?: (target: CanvasResourceTarget) => void;
+  connectionSource?: string;
+  connections: GridConnection[];
+  endpoints: Map<string, CanvasNode>;
+  updatingConnections: boolean;
+  onStartConnection: (event: PointerEvent<HTMLButtonElement>, sourceId: string) => void;
+  onSelectConnectionSource: (sourceId: string) => void;
+  onCompleteConnection: (targetId: string) => void;
 }) {
+  const [removeArmed, setRemoveArmed] = useState(false);
   const Icon = node.icon;
   const metric = metricParts(node);
   const accent = accentForNode(node);
@@ -669,59 +990,163 @@ function ServiceCard({
         : compact
           ? "rounded-[18px]"
           : "rounded-[22px]";
+  const resourceTarget =
+    node.resourceId && (node.kind === "asset" || node.kind === "service")
+      ? ({
+          kind: node.kind,
+          id: node.resourceId,
+        } satisfies CanvasResourceTarget)
+      : null;
+  const endpointId = node.resourceId ?? node.id;
+  const sourcePort = canStartConnection(node);
+  const targetPort = canEndConnection(node);
+  const targetProblem = connectionSource
+    ? connectionProblem(connectionSource, endpointId, endpoints, connections)
+    : null;
 
   return (
-    <article
-      className={`group absolute flex cursor-grab flex-col overflow-hidden border border-border bg-card text-left outline-none transition-[box-shadow,opacity,transform] active:cursor-grabbing ${radius} ${selected ? "ring-1 ring-foreground/20" : "hover:-translate-y-0.5"} ${node.dimmed ? "opacity-50" : "opacity-100"}`}
-      style={{
-        width: node.width,
-        height: node.height,
-        left: node.x,
-        top: node.y,
-        boxShadow: selected
-          ? "inset 0 1px 0 color-mix(in oklch, var(--foreground) 11%, transparent), 0 24px 54px -24px color-mix(in oklch, var(--foreground) 32%, transparent), 0 10px 22px -14px color-mix(in oklch, var(--foreground) 24%, transparent)"
-          : "inset 0 1px 0 color-mix(in oklch, var(--foreground) 9%, transparent), 0 18px 42px -22px color-mix(in oklch, var(--foreground) 28%, transparent), 0 8px 18px -13px color-mix(in oklch, var(--foreground) 20%, transparent)",
-      }}
-      onPointerDown={onPointerDown}
-    >
-      <span
-        className="pointer-events-none absolute inset-x-5 top-0 h-px"
-        style={{
-          background: `linear-gradient(90deg, transparent, color-mix(in oklch, ${accent} 46%, transparent), transparent)`,
-        }}
-      />
-      <span className={`flex shrink-0 items-center gap-2.5 ${compact ? "px-3 pt-3" : "px-4 pt-4"}`}>
+    <ContextMenu onOpenChange={(open) => !open && setRemoveArmed(false)}>
+      <ContextMenuTrigger
+        render={
+          <article
+            className={`group absolute flex cursor-grab flex-col overflow-visible border border-border bg-card text-left outline-none transition-[box-shadow,opacity,transform] active:cursor-grabbing ${radius} ${selected ? "ring-1 ring-foreground/20" : "hover:-translate-y-0.5"} ${node.dimmed ? "opacity-50" : "opacity-100"}`}
+            style={{
+              width: node.width,
+              height: node.height,
+              left: node.x,
+              top: node.y,
+              boxShadow: selected
+                ? "inset 0 1px 0 color-mix(in oklch, var(--foreground) 11%, transparent), 0 24px 54px -24px color-mix(in oklch, var(--foreground) 32%, transparent), 0 10px 22px -14px color-mix(in oklch, var(--foreground) 24%, transparent)"
+                : "inset 0 1px 0 color-mix(in oklch, var(--foreground) 9%, transparent), 0 18px 42px -22px color-mix(in oklch, var(--foreground) 28%, transparent), 0 8px 18px -13px color-mix(in oklch, var(--foreground) 20%, transparent)",
+            }}
+            onPointerDown={onPointerDown}
+          />
+        }
+      >
         <span
-          className={`grid shrink-0 place-items-center rounded-full ${compact ? "size-9" : "size-10"} ${node.iconClassName}`}
+          className="pointer-events-none absolute inset-x-5 top-0 h-px"
+          style={{
+            background: `linear-gradient(90deg, transparent, color-mix(in oklch, ${accent} 46%, transparent), transparent)`,
+          }}
+        />
+        <span
+          className={`flex shrink-0 items-center gap-2.5 ${compact ? "px-3 pt-3" : "px-4 pt-4"}`}
         >
-          <Icon className={compact ? "size-4" : "size-5"} />
-        </span>
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-semibold text-card-foreground">
-            {node.title}
-          </span>
-        </span>
-      </span>
-
-      <span className={`relative block min-h-0 flex-1 ${compact ? "px-3 pt-1.5" : "px-4 pt-3"}`}>
-        <span className="relative z-10 flex items-baseline gap-1.5">
           <span
-            className={`${spacious ? "text-[30px]" : "text-2xl"} font-medium tracking-[-0.04em] text-card-foreground`}
+            className={`grid shrink-0 place-items-center rounded-full ${compact ? "size-9" : "size-10"} ${node.iconClassName}`}
           >
-            {metric.value}
+            <Icon className={compact ? "size-4" : "size-5"} />
           </span>
-          <span className="max-w-24 truncate text-[10px] text-muted-foreground">{metric.unit}</span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-card-foreground">
+              {node.title}
+            </span>
+          </span>
         </span>
-        {node.assetType === "diesel" || node.id === "diesel" ? (
-          <DieselIntake litres={dieselLitres} status={node.status} statusTone={node.statusTone} />
-        ) : (
-          <>
-            <NodeVisual node={node} accent={accent} />
-            <StatusPill node={node} accent={accent} compact={compact} />
-          </>
-        )}
-      </span>
-    </article>
+
+        <span className={`relative block min-h-0 flex-1 ${compact ? "px-3 pt-1.5" : "px-4 pt-3"}`}>
+          <span className="relative z-10 flex items-baseline gap-1.5">
+            <span
+              className={`${spacious ? "text-[30px]" : "text-2xl"} font-medium tracking-[-0.04em] text-card-foreground`}
+            >
+              {metric.value}
+            </span>
+            <span className="max-w-24 truncate text-[10px] text-muted-foreground">
+              {metric.unit}
+            </span>
+          </span>
+          {node.assetType === "diesel" || node.id === "diesel" ? (
+            <DieselIntake litres={dieselLitres} status={node.status} statusTone={node.statusTone} />
+          ) : (
+            <>
+              <NodeVisual node={node} accent={accent} />
+              <StatusPill node={node} accent={accent} compact={compact} />
+            </>
+          )}
+        </span>
+        {targetPort ? (
+          <button
+            type="button"
+            data-connection-target={endpointId}
+            aria-label={`Connect to ${node.title}`}
+            aria-disabled={Boolean(connectionSource && targetProblem)}
+            title={
+              connectionSource
+                ? (targetProblem ?? `Connect to ${node.title}`)
+                : `Input for ${node.title}`
+            }
+            className={`absolute -left-6 top-1/2 z-30 grid size-5 -translate-y-1/2 place-items-center rounded-full border-2 outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring ${
+              connectionSource
+                ? targetProblem
+                  ? "scale-90 border-destructive bg-card text-destructive"
+                  : "scale-125 border-primary bg-primary text-primary-foreground"
+                : "border-muted-foreground bg-card text-muted-foreground hover:border-primary hover:text-primary"
+            }`}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (connectionSource) onCompleteConnection(endpointId);
+            }}
+            onKeyDown={(event) => {
+              if (connectionSource && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                onCompleteConnection(endpointId);
+              }
+            }}
+          >
+            <span className="size-1.5 rounded-full bg-current" />
+          </button>
+        ) : null}
+        {sourcePort ? (
+          <button
+            type="button"
+            aria-label={`Start a connection from ${node.title}`}
+            aria-pressed={connectionSource === endpointId}
+            disabled={updatingConnections}
+            title={`Output from ${node.title}`}
+            className={`absolute -right-6 top-1/2 z-30 grid size-5 -translate-y-1/2 place-items-center rounded-full border-2 bg-card outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring ${
+              connectionSource === endpointId
+                ? "scale-125 border-primary text-primary"
+                : "border-muted-foreground text-muted-foreground hover:border-primary hover:text-primary"
+            }`}
+            onPointerDown={(event) => onStartConnection(event, endpointId)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.detail === 0) onSelectConnectionSource(endpointId);
+            }}
+          >
+            <span className="size-1.5 rounded-full bg-current" />
+          </button>
+        ) : null}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40" onPointerDown={(event) => event.stopPropagation()}>
+        <ContextMenuItem
+          disabled={!resourceTarget}
+          onClick={() => resourceTarget && onEdit?.(resourceTarget)}
+        >
+          <PencilIcon />
+          Edit
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          variant="destructive"
+          disabled={!resourceTarget}
+          closeOnClick={removeArmed}
+          onClick={() => {
+            if (!resourceTarget) return;
+            if (!removeArmed) {
+              setRemoveArmed(true);
+              return;
+            }
+            onRemove?.(resourceTarget);
+          }}
+        >
+          <Trash2Icon />
+          {removeArmed ? "Confirm?" : "Remove"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -861,8 +1286,11 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
 
 function metricParts(node: CanvasNode) {
   if (node.kind === "controller" || node.id === "controller") {
-    const match = node.metric.match(/Demand (\d+) kW/);
-    return { value: match?.[1] ?? node.metric, unit: match ? "kW demand" : "" };
+    const match = node.metric.match(/^([\d.]+) \/ ([\d.]+) kW$/);
+    return {
+      value: match?.[1] ?? node.metric,
+      unit: match ? `of ${match[2]} kW served` : "",
+    };
   }
 
   const match = node.metric.match(/^([\d.]+)\s*(.*)$/);
@@ -881,27 +1309,82 @@ function accentForNode(node: CanvasNode) {
   return "var(--primary)";
 }
 
-function connectionPath(from: CanvasNode, to: CanvasNode) {
-  const fromCenterX = from.x + from.width / 2;
-  const fromCenterY = from.y + from.height / 2;
-  const toCenterX = to.x + to.width / 2;
-  const toCenterY = to.y + to.height / 2;
-  const deltaX = toCenterX - fromCenterX;
-  const deltaY = toCenterY - fromCenterY;
+function canStartConnection(node: CanvasNode) {
+  return node.kind === "asset" || node.kind === "controller";
+}
 
-  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
-    const startX = deltaX >= 0 ? from.x + from.width : from.x;
-    const endX = deltaX >= 0 ? to.x : to.x + to.width;
-    const direction = deltaX >= 0 ? 1 : -1;
-    const bend = Math.max(56, Math.abs(endX - startX) * 0.45) * direction;
-    return `M ${startX} ${fromCenterY} C ${startX + bend} ${fromCenterY}, ${endX - bend} ${toCenterY}, ${endX} ${toCenterY}`;
+function canEndConnection(node: CanvasNode) {
+  return (
+    node.kind === "controller" ||
+    node.kind === "service" ||
+    (node.kind === "asset" && node.assetType === "battery")
+  );
+}
+
+function connectionProblem(
+  sourceId: string,
+  targetId: string,
+  endpoints: Map<string, CanvasNode>,
+  connections: GridConnection[],
+) {
+  const source = endpoints.get(sourceId);
+  const target = endpoints.get(targetId);
+  if (!source || !target) return "This connection uses a grid item that does not exist.";
+  if (sourceId === targetId) return "A grid item cannot connect to itself.";
+  if (
+    connections.some(
+      (connection) => connection.source_id === sourceId && connection.target_id === targetId,
+    )
+  ) {
+    return "This connection already exists.";
   }
 
-  const startY = deltaY >= 0 ? from.y + from.height : from.y;
-  const endY = deltaY >= 0 ? to.y : to.y + to.height;
-  const direction = deltaY >= 0 ? 1 : -1;
-  const bend = Math.max(56, Math.abs(endY - startY) * 0.45) * direction;
-  return `M ${fromCenterX} ${startY} C ${fromCenterX} ${startY + bend}, ${toCenterX} ${endY - bend}, ${toCenterX} ${endY}`;
+  if (source.kind === "controller") {
+    if (target.kind === "service" || target.assetType === "battery") return null;
+    return "The controller can send power only to a battery or consumer.";
+  }
+  if (source.kind !== "asset") return "Consumers cannot supply another grid item.";
+  if (source.assetType === "battery") {
+    return target.kind === "controller" ? null : "A battery output must connect to the controller.";
+  }
+  if (
+    source.assetType === "solar" ||
+    source.assetType === "wind" ||
+    source.assetType === "diesel"
+  ) {
+    if (target.kind === "controller" || target.assetType === "battery") return null;
+    return "Generation can connect only to the controller or a battery.";
+  }
+  return "This output cannot connect to the selected input.";
+}
+
+function canvasPoint(
+  event: { clientX: number; clientY: number },
+  canvas: HTMLDivElement | null,
+  transform: CanvasTransform,
+) {
+  const bounds = canvas?.getBoundingClientRect();
+  if (!bounds) return undefined;
+  return {
+    x: (event.clientX - bounds.left - transform.x) / transform.scale,
+    y: (event.clientY - bounds.top - transform.y) / transform.scale,
+  };
+}
+
+function connectionPath(from: CanvasNode, to: CanvasNode) {
+  const startX = from.x + from.width + 14;
+  const fromCenterY = from.y + from.height / 2;
+  const endX = to.x - 14;
+  const toCenterY = to.y + to.height / 2;
+  const bend = Math.max(64, Math.abs(endX - startX) * 0.42);
+  return `M ${startX} ${fromCenterY} C ${startX + bend} ${fromCenterY}, ${endX - bend} ${toCenterY}, ${endX} ${toCenterY}`;
+}
+
+function draftConnectionPath(from: CanvasNode, targetX: number, targetY: number) {
+  const startX = from.x + from.width + 14;
+  const startY = from.y + from.height / 2;
+  const bend = Math.max(64, Math.abs(targetX - startX) * 0.42);
+  return `M ${startX} ${startY} C ${startX + bend} ${startY}, ${targetX - bend} ${targetY}, ${targetX} ${targetY}`;
 }
 
 function applyOperatingState(
@@ -989,13 +1472,20 @@ function applyOperatingState(
     case "controller":
       return {
         ...node,
-        metric: `Demand ${state.demandKw} kW`,
+        metric: `${state.servedKw} / ${state.demandKw} kW`,
         status: state.contractAtRisk
           ? "A commitment needs attention"
-          : state.dieselOn
-            ? "Dispatching backup generation"
-            : "All commitments protected",
-        statusTone: state.contractAtRisk ? "warning" : state.dieselOn ? "active" : "normal",
+          : state.deferredKw > 0.001
+            ? `${state.deferredKw} kW demand deferred`
+            : state.dieselOn
+              ? "Dispatching backup generation"
+              : "All commitments protected",
+        statusTone:
+          state.contractAtRisk || state.deferredKw > 0.001
+            ? "warning"
+            : state.dieselOn
+              ? "active"
+              : "normal",
       };
     case "clinic":
       return {

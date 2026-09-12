@@ -1,4 +1,10 @@
-import type { PlanningRequest, PlanRun, Scenario } from "@/lib/plan-run";
+import type {
+  GridConnection,
+  PlanningRequest,
+  PlanRun,
+  Scenario,
+  ScenarioSummary,
+} from "@/lib/plan-run";
 
 export type BackendHealth = {
   service: string;
@@ -59,6 +65,27 @@ export async function getScenario(scenarioId: string, signal?: AbortSignal): Pro
   );
 }
 
+export async function getScenarios(signal?: AbortSignal): Promise<ScenarioSummary[]> {
+  return requestJSON<ScenarioSummary[]>(
+    "/api/backend/scenarios?limit=100",
+    { signal },
+    "Scenarios",
+  );
+}
+
+export async function createScenario(scenario: Scenario, signal?: AbortSignal): Promise<Scenario> {
+  return requestJSON<Scenario>(
+    "/api/backend/scenarios",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(scenario),
+      signal,
+    },
+    "Scenario creation",
+  );
+}
+
 export async function updateScenario(scenario: Scenario, signal?: AbortSignal): Promise<Scenario> {
   return requestJSON<Scenario>(
     `/api/backend/scenarios/${encodeURIComponent(scenario.id)}`,
@@ -70,6 +97,34 @@ export async function updateScenario(scenario: Scenario, signal?: AbortSignal): 
     },
     "Scenario update",
   );
+}
+
+export async function updateScenarioConnections(
+  scenarioId: string,
+  connections: GridConnection[],
+  signal?: AbortSignal,
+): Promise<Scenario> {
+  return requestJSON<Scenario>(
+    `/api/backend/scenarios/${encodeURIComponent(scenarioId)}/connections`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connections }),
+      signal,
+    },
+    "Grid connection update",
+  );
+}
+
+export async function deleteScenario(scenarioId: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`/api/backend/scenarios/${encodeURIComponent(scenarioId)}`, {
+    method: "DELETE",
+    signal,
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? `Scenario deletion returned ${response.status}.`);
+  }
 }
 
 export async function createPlanRun(

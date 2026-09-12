@@ -1,7 +1,28 @@
 export type ContractPriority = "critical" | "essential" | "flexible";
 export type ContractStatus = "safe" | "at_risk" | "met" | "breached";
 
-export const defaultScenarioId = "spiti-valley-default";
+export type GridConnection = {
+  id: string;
+  source_id: string;
+  target_id: string;
+};
+
+export const defaultScenarioId = "spiti-valley-community-v2";
+
+export type ScenarioSummary = {
+  id: string;
+  name: string;
+  site_name: string;
+  location: string;
+  revision: number;
+  horizon: {
+    starts_at: string;
+    interval_minutes: number;
+    interval_count: number;
+  };
+  contract_count: number;
+  event_count: number;
+};
 
 export type Scenario = {
   schema_version: "1";
@@ -29,6 +50,9 @@ export type Scenario = {
       minimum_output_kw?: number;
       maximum_output_kw?: number;
       liters_per_kwh?: number;
+      startup_fuel_liters?: number;
+      minimum_runtime_minutes?: number;
+      ramp_rate_kw_per_minute?: number;
       fuel_cost_per_liter?: number;
       emissions_kg_co2_per_liter?: number;
     }>;
@@ -39,6 +63,7 @@ export type Scenario = {
       control_mode: "fixed" | "curtailable" | "shiftable";
       rated_power_kw: number;
     }>;
+    connections?: GridConnection[];
   };
   horizon: {
     starts_at: string;
@@ -114,7 +139,9 @@ export type PlanInterval = {
     asset_id: string;
     output_kw: number;
     running: boolean;
+    started: boolean;
     fuel_used_liters: number;
+    startup_fuel_liters: number;
     fuel_remaining_liters: number;
   }>;
   services: Array<{
@@ -133,6 +160,7 @@ export type PlanInterval = {
     remaining_runtime_minutes?: number;
   }>;
   losses_kw: number;
+  dumped_power_kw: number;
   diesel_cost: number;
   emissions_kg_co2: number;
   unserved_energy_kwh: number;
@@ -248,6 +276,7 @@ export type PlanRun = {
   id: string;
   scenario_id: string;
   scenario_revision: number;
+  scenario_snapshot_hash: string;
   parent_run_id?: string;
   planner: "baseline" | "wattson";
   status: "computing" | "complete" | "infeasible" | "failed";
