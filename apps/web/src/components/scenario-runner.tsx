@@ -17,7 +17,6 @@ import {
 } from "@getficksd/ui/components/select";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangleIcon,
   CalendarClockIcon,
   CloudSunIcon,
   LoaderCircleIcon,
@@ -26,7 +25,6 @@ import {
   PlayIcon,
   PlusIcon,
   RotateCcwIcon,
-  ShieldCheckIcon,
   SparklesIcon,
   Trash2Icon,
   WindIcon,
@@ -36,6 +34,7 @@ import { toast } from "sonner";
 
 import { createScenario } from "@/lib/backend";
 import type { PlanRun, Scenario, ScenarioSummary } from "@/lib/plan-run";
+import { DisruptionManager } from "@/components/disruption-manager";
 
 type SupplyPreset = "cloudy" | "low-wind" | "normal";
 type CurvePoint = { id: string; hour: number; value: number };
@@ -60,6 +59,8 @@ export function ScenarioRunner({
   onPause,
   onRepeat,
   onDeleteScenario,
+  onUpdateScenario,
+  isUpdatingScenario,
 }: {
   scenarios: ScenarioSummary[];
   scenario?: Scenario;
@@ -73,10 +74,11 @@ export function ScenarioRunner({
   onPause: () => void;
   onRepeat: () => void;
   onDeleteScenario: (scenarioID: string) => Promise<void>;
+  onUpdateScenario: (scenario: Scenario) => Promise<Scenario>;
+  isUpdatingScenario: boolean;
 }) {
   const [designerOpen, setDesignerOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const state = isPlanning ? "Calculating" : isPlaying ? "Playing" : run ? "Paused" : "Ready";
   const canDelete = scenarios.length > 1;
   const deleteSelectedScenario = async () => {
     if (!scenario) return;
@@ -107,7 +109,7 @@ export function ScenarioRunner({
           <Button
             size="icon-sm"
             variant="ghost"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
             aria-label="Delete active scenario"
             title={
               canDelete
@@ -158,60 +160,24 @@ export function ScenarioRunner({
               ))}
             </SelectContent>
           </Select>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2">
-          <ScenarioMetric
-            icon={AlertTriangleIcon}
-            label="Disruptions"
-            value={scenario ? String(scenario.events.length) : "—"}
-          />
-          <ScenarioMetric
-            icon={ShieldCheckIcon}
-            label="Commitments"
-            value={scenario ? String(scenario.contracts.length) : "—"}
-          />
-          <ScenarioMetric
-            icon={CalendarClockIcon}
-            label="Revision"
-            value={scenario ? String(scenario.revision) : "—"}
-          />
-        </div>
-
-        <div className="min-h-16 rounded-lg border border-border bg-background p-2.5">
-          <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            Stress events
+          <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+            {scenario
+              ? `${scenario.events.length} disruptions · ${scenario.contracts.length} commitments · Revision ${scenario.revision}`
+              : "No scenario details"}
           </p>
-          <div className="flex flex-wrap gap-1.5">
-            {scenario?.events.length ? (
-              scenario.events.slice(0, 3).map((event) => (
-                <span
-                  key={event.id}
-                  className="max-w-full truncate rounded-full border border-border bg-muted/50 px-2 py-1 text-[10px] text-foreground"
-                  title={event.name}
-                >
-                  {event.name}
-                </span>
-              ))
-            ) : (
-              <span className="text-xs text-muted-foreground">No disruptions configured.</span>
-            )}
-          </div>
         </div>
 
-        <div className="mt-auto flex items-center justify-between gap-3 rounded-lg border border-border bg-background p-2">
-          <div className="flex items-center gap-2 px-1.5 text-xs font-medium">
-            <span
-              className={`size-2 rounded-full ${isPlanning || isPlaying ? "bg-primary" : "bg-muted-foreground/40"}`}
-            />
-            <div>
-              <p>{state}</p>
-              <p className="text-[10px] font-normal text-muted-foreground">
-                {run ? "24-hour plan available" : "No calculated plan"}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center rounded-full border border-border bg-card p-1">
+        <DisruptionManager
+          scenario={scenario}
+          isSaving={isUpdatingScenario}
+          onSave={onUpdateScenario}
+        />
+
+        <div className="mt-auto flex items-center justify-between gap-3 border-t border-border pt-3">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            Replay controls
+          </p>
+          <div className="flex items-center gap-1">
             <Button
               size="icon-sm"
               variant="ghost"
@@ -279,26 +245,6 @@ export function ScenarioRunner({
         </DialogContent>
       </Dialog>
     </section>
-  );
-}
-
-function ScenarioMetric({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof CalendarClockIcon;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-background p-2.5">
-      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-muted-foreground">
-        <Icon className="size-3" />
-        <span className="truncate">{label}</span>
-      </div>
-      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
-    </div>
   );
 }
 

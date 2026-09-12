@@ -14,8 +14,6 @@ import {
 } from "@getficksd/ui/components/tooltip";
 import {
   BatteryChargingIcon,
-  CircleDotDashedIcon,
-  Clock3Icon,
   CrossIcon,
   DropletsIcon,
   FuelIcon,
@@ -50,12 +48,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 
-import {
-  activePlanEventsAt,
-  formatOperatingTime,
-  operatingStateAt,
-  TimeRail,
-} from "@/components/time-rail";
+import { operatingStateAt, TimeRail } from "@/components/time-rail";
 import type { GridConnection, PlanRun, Scenario } from "@/lib/plan-run";
 
 const GRID_SIZE = 16;
@@ -544,7 +537,6 @@ export function DeploymentCanvas({
   );
   const endpointLookup = useMemo(() => endpointNodeLookup(sceneNodes), [sceneNodes]);
   const connections = scenario?.site.connections ?? [];
-  const activeEvents = activePlanEventsAt(currentHour, scenario, run);
   const startCanvasDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -728,7 +720,7 @@ export function DeploymentCanvas({
       className={`relative h-full min-h-0 w-full touch-none overflow-hidden bg-background select-none ${drag?.type === "canvas" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage:
-          "radial-gradient(circle, color-mix(in oklch, var(--muted-foreground) 24%, transparent) 1px, transparent 1.2px)",
+          "radial-gradient(circle, color-mix(in oklch, var(--muted-foreground) 12%, transparent) 1px, transparent 1.2px)",
         backgroundPosition: `${transform.x}px ${transform.y}px`,
         backgroundSize: `${GRID_SIZE * transform.scale}px ${GRID_SIZE * transform.scale}px`,
       }}
@@ -737,53 +729,6 @@ export function DeploymentCanvas({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
     >
-      <div
-        className="absolute left-4 top-16 z-20 max-w-[calc(100%-2rem)] rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-2xl backdrop-blur sm:left-1/2 sm:top-4 sm:max-w-[22rem] sm:-translate-x-1/2"
-        onPointerDown={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center gap-2">
-          {run ? (
-            <CircleDotDashedIcon
-              className={`size-4 ${isPlaying ? "animate-spin text-primary [animation-duration:3s] motion-reduce:animate-none" : "text-muted-foreground"}`}
-            />
-          ) : (
-            <Clock3Icon className="size-4 text-muted-foreground" />
-          )}
-          <span className="text-xs font-semibold text-foreground">
-            {run ? "24-hour plan replay" : "Static grid model"}
-          </span>
-          {run ? (
-            <span
-              className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ${isPlaying ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}
-            >
-              {isPlaying ? "Playing" : "Paused"}
-            </span>
-          ) : null}
-        </div>
-        <p className="mt-0.5 text-[10px] text-muted-foreground">
-          {run
-            ? `${formatOperatingTime(currentHour, scenario)} plan time · Values interpolate between 15-minute steps · Not live telemetry`
-            : "Run a plan to animate the full operating day."}
-        </p>
-        {activeEvents.length > 0 || operatingState.deferredKw > 0.001 ? (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {activeEvents.map((event) => (
-              <span
-                key={event.id}
-                className="rounded-full bg-chart-5/15 px-2 py-0.5 text-[9px] font-medium text-chart-5"
-              >
-                {event.name} active
-              </span>
-            ))}
-            {operatingState.deferredKw > 0.001 ? (
-              <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[9px] font-medium text-destructive">
-                {operatingState.deferredKw} kW deferred
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
       <div
         className="absolute right-4 top-4 z-20 flex rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur"
         role="group"
@@ -847,7 +792,11 @@ export function DeploymentCanvas({
             if (!from || !to) return null;
             const emphasized = connectionIsEmphasized(from, to, view);
             const flowKw = connectionFlowKw(from, to, operatingState);
-            const activeFlow = flowKw > 0.05;
+            const materialFlow = flowKw >= 0.5;
+            const normalServiceFlow =
+              from.kind === "controller" && to.kind === "service" && to.statusTone !== "warning";
+            const attentionFlow = to.statusTone === "warning";
+            const animatedFlow = materialFlow && !normalServiceFlow && isPlaying;
             const flowAccent = accentForNode(from.kind === "controller" ? to : from);
             return (
               <g key={connection.id}>
@@ -857,25 +806,35 @@ export function DeploymentCanvas({
                   stroke={
                     selectedConnection === connection.id
                       ? "var(--primary)"
-                      : activeFlow
-                        ? flowAccent
-                        : "var(--muted-foreground)"
+                      : attentionFlow
+                        ? "var(--destructive)"
+                        : materialFlow && !normalServiceFlow
+                          ? flowAccent
+                          : "var(--muted-foreground)"
                   }
                   strokeOpacity={
                     selectedConnection === connection.id
                       ? 1
-                      : emphasized
-                        ? activeFlow
-                          ? 1
-                          : 0.7
-                        : 0.12
+                      : attentionFlow
+                        ? 0.9
+                        : emphasized
+                          ? materialFlow && !normalServiceFlow
+                            ? 0.72
+                            : 0.3
+                          : 0.12
                   }
-                  strokeWidth={selectedConnection === connection.id ? 3 : activeFlow ? 2.5 : 1.5}
-                  strokeDasharray={activeFlow ? "3 8" : "5 5"}
+                  strokeWidth={
+                    selectedConnection === connection.id || attentionFlow
+                      ? 3
+                      : materialFlow && !normalServiceFlow
+                        ? 2.25
+                        : 1.5
+                  }
+                  strokeDasharray={animatedFlow ? "3 8" : undefined}
                   markerEnd="url(#canvas-arrow)"
                   pointerEvents="none"
                 >
-                  {activeFlow && isPlaying ? (
+                  {animatedFlow ? (
                     <animate
                       attributeName="stroke-dashoffset"
                       from="22"
@@ -995,7 +954,7 @@ export function DeploymentCanvas({
         </div>
       ) : null}
 
-      <div className="absolute left-4 top-16 flex flex-col gap-2">
+      <div className="absolute left-4 top-4 flex flex-col gap-2">
         <div className="flex flex-col rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur">
           <Button
             size="icon"
@@ -1155,7 +1114,7 @@ function ServiceCard({
             <Button
               size="icon-xs"
               variant="ghost"
-              className="shrink-0 text-muted-foreground opacity-80 hover:text-foreground group-hover:opacity-100"
+              className="pointer-events-none shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
               aria-label={`Edit ${node.title}`}
               title={`Edit ${node.title}`}
               onPointerDown={(event) => {
@@ -1189,7 +1148,7 @@ function ServiceCard({
           ) : (
             <>
               <NodeVisual node={node} accent={accent} />
-              <StatusPill node={node} compact={compact} />
+              {node.statusTone === "warning" ? <StatusPill node={node} compact={compact} /> : null}
             </>
           )}
         </span>
@@ -1394,7 +1353,13 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
 
   if (node.serviceMode === "fixed" || node.id === "clinic") {
     return (
-      <span className="absolute bottom-3 right-3 grid size-10 place-items-center rounded-full border border-destructive/30 bg-destructive/10 text-sm font-medium text-destructive">
+      <span
+        className={`absolute bottom-3 right-3 grid size-10 place-items-center rounded-full border text-sm font-medium ${
+          node.statusTone === "warning"
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : "border-border bg-muted text-muted-foreground"
+        }`}
+      >
         24h
       </span>
     );

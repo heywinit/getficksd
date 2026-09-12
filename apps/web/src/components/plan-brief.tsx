@@ -5,8 +5,6 @@ import {
   ChevronRightIcon,
   ClipboardIcon,
   Clock3Icon,
-  PauseIcon,
-  PlayIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
@@ -18,7 +16,6 @@ export function PlanBrief({
   scenario,
   run,
   currentHour,
-  isPlaying,
   onSelectHour,
 }: {
   scenario?: Scenario;
@@ -75,19 +72,9 @@ export function PlanBrief({
             )}
           </div>
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 id="plan-brief-title" className="text-base font-semibold tracking-tight">
-                {run ? (safe ? "Stress test passed" : "Operator action required") : "Plan preview"}
-              </h2>
-              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {isPlaying ? <PlayIcon className="size-2.5" /> : <PauseIcon className="size-2.5" />}
-                {run
-                  ? isPlaying
-                    ? "Simulation playing"
-                    : "Simulation paused"
-                  : "Forecast snapshot"}
-              </span>
-            </div>
+            <h2 id="plan-brief-title" className="text-base font-semibold tracking-tight">
+              {run ? (safe ? "Stress test passed" : "Operator action required") : "Plan preview"}
+            </h2>
             <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
               {run
                 ? safe
@@ -95,6 +82,13 @@ export function PlanBrief({
                   : `${run.summary.contracts_breached} commitments breach during this 24-hour scenario.`
                 : "The grid shows one forecast moment. Calculate a plan to animate the full operating day."}
             </p>
+            {run?.optimization ? (
+              <p className="mt-1 text-[10px] font-medium text-primary">
+                {run.optimization.used_fallback
+                  ? "Deterministic fallback used"
+                  : `HiGHS ${run.optimization.termination} · ${(run.optimization.solve_ms / 1_000).toFixed(2)}s · ${(run.optimization.mip_gap * 100).toFixed(2)}% gap`}
+              </p>
+            ) : null}
             {nextDecision ? (
               <button
                 type="button"
@@ -143,8 +137,8 @@ export function PlanBrief({
       </div>
 
       {decisions.length > 0 ? (
-        <div className="flex-1 border-t border-border p-4">
-          <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex-1 border-t border-border p-3">
+          <div className="mb-2 flex items-center justify-between gap-3 px-1">
             <div>
               <h3 className="text-xs font-semibold">Decision feed</h3>
               <p className="mt-0.5 text-[10px] text-muted-foreground">
@@ -156,25 +150,25 @@ export function PlanBrief({
               {decisions.length} actions
             </span>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-1">
             {decisions.slice(0, 4).map((decision) => {
               const active = Math.abs(decision.interval_index - currentIndex) <= 1;
               return (
                 <button
                   key={decision.id}
                   type="button"
-                  className={`min-w-0 rounded-lg border p-2.5 text-left transition-colors ${
+                  className={`grid min-w-0 gap-x-3 rounded-md border px-2.5 py-2 text-left transition-colors sm:grid-cols-[3.5rem_minmax(0,0.7fr)_minmax(0,1.3fr)] sm:items-center ${
                     active
                       ? "border-primary/40 bg-primary/10"
-                      : "border-border bg-background hover:bg-muted/60"
+                      : "border-transparent hover:bg-muted/60"
                   }`}
                   onClick={() => onSelectHour(decisionHour(decision.interval_index, scenario))}
                 >
-                  <p className="font-mono text-[10px] text-muted-foreground">
+                  <p className="font-mono text-[10px] text-muted-foreground sm:row-span-1">
                     {formatDecisionTime(decision.interval_index, scenario)}
                   </p>
-                  <p className="mt-1 truncate text-xs font-medium">{decision.title}</p>
-                  <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">
+                  <p className="truncate text-xs font-medium">{decision.title}</p>
+                  <p className="line-clamp-1 text-[10px] leading-4 text-muted-foreground">
                     {decision.reason}
                   </p>
                 </button>
@@ -189,11 +183,11 @@ export function PlanBrief({
 
 function BriefMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="border-b border-r border-border p-3 even:border-r-0 [&:nth-last-child(-n+2)]:border-b-0">
+    <div className="border-b border-r border-border p-2.5 even:border-r-0 [&:nth-last-child(-n+2)]:border-b-0">
       <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </p>
-      <p className="mt-1 text-lg font-semibold tracking-tight text-card-foreground">{value}</p>
+      <p className="mt-0.5 text-base font-semibold tracking-tight text-card-foreground">{value}</p>
       <p className="text-[10px] text-muted-foreground">{detail}</p>
     </div>
   );

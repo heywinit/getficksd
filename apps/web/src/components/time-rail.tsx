@@ -1,11 +1,5 @@
 import { Button } from "@getficksd/ui/components/button";
-import {
-  ChevronDownIcon,
-  ChevronUpIcon,
-  CircleDotDashedIcon,
-  PauseIcon,
-  PlayIcon,
-} from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { useMemo, useRef, useState, type PointerEvent } from "react";
 
 import type { PlanRun, Scenario } from "@/lib/plan-run";
@@ -62,21 +56,16 @@ export function TimeRail({
           className="flex h-full animate-in items-center gap-2 px-2.5 duration-200 fade-in slide-in-from-top-1 motion-reduce:animate-none"
         >
           <Button
-            size="icon-xs"
-            variant="ghost"
+            size="xs"
+            variant="outline"
             aria-label={isPlaying ? "Pause replay" : "Start replay"}
             onClick={togglePlayback}
           >
             {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            {isPlaying ? "Pause" : "Play"}
           </Button>
-          <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <CircleDotDashedIcon
-              className={`size-3.5 ${isPlaying ? "animate-spin text-primary [animation-duration:3s] motion-reduce:animate-none" : "text-muted-foreground"}`}
-            />
-            24-hour plan
-          </span>
-          <span className="font-mono text-[10px] text-muted-foreground">
-            {isPlaying ? "Playing" : "Paused"} · {formatOperatingTime(currentHour, scenario)}
+          <span className="whitespace-nowrap font-mono text-[10px] font-medium text-foreground sm:text-xs">
+            Plan replay · {formatOperatingTime(currentHour, scenario)}
           </span>
           {activeEvents.length > 0 ? (
             <span className="hidden truncate rounded-full bg-chart-5/15 px-2 py-1 text-[9px] font-medium text-chart-5 sm:block">
@@ -137,28 +126,24 @@ export function TimeRail({
         key="expanded"
         className="flex h-full animate-in duration-300 fade-in slide-in-from-bottom-2 motion-reduce:animate-none"
       >
-        <div className="flex w-28 shrink-0 flex-col justify-between border-r border-border p-2.5 sm:w-36">
-          <div className="flex items-center gap-1.5">
+        <div className="flex w-32 shrink-0 flex-col justify-between border-r border-border p-2.5 sm:w-44">
+          <div className="flex flex-col items-start gap-1.5">
             <Button
-              size="icon-xs"
-              variant="ghost"
+              size="xs"
+              variant="outline"
               aria-label={isPlaying ? "Pause replay" : "Start replay"}
               onClick={togglePlayback}
             >
               {isPlaying ? <PauseIcon /> : <PlayIcon />}
+              {isPlaying ? "Pause" : "Play"}
             </Button>
-            <span className="font-mono text-sm font-medium text-foreground">
-              {formatOperatingTime(currentHour, scenario)}
+            <span className="whitespace-nowrap font-mono text-[10px] font-medium text-foreground sm:text-xs">
+              Plan replay · {formatOperatingTime(currentHour, scenario)}
             </span>
           </div>
-          <div>
-            <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              24-hour plan replay
-            </p>
-            <p className="mt-0.5 hidden text-[10px] text-muted-foreground sm:block">
-              {isPlaying ? "Playing" : "Paused"} · {formatOperatingDate(scenario)}
-            </p>
-          </div>
+          <p className="hidden truncate text-[10px] text-muted-foreground sm:block">
+            {formatOperatingDate(scenario)}
+          </p>
         </div>
 
         <div
@@ -271,12 +256,6 @@ export function TimeRail({
             />
           </svg>
 
-          <span
-            className="pointer-events-none absolute top-[19px] -translate-x-1/2 font-mono text-[9px] font-medium text-foreground"
-            style={{ left: `${(currentHour / 24) * 100}%` }}
-          >
-            PLAN TIME
-          </span>
           <span
             className={`pointer-events-none absolute bottom-1 whitespace-nowrap font-mono text-[8px] uppercase tracking-wide text-chart-2 ${deadlineHour >= 22 ? "-translate-x-full" : "-translate-x-1/2"}`}
             style={{ left: `${clamp((deadlineHour / 24) * 100, 2, 100)}%` }}
