@@ -1,3 +1,5 @@
+import type { PlanningRequest, PlanRun, Scenario } from "@/lib/plan-run";
+
 export type BackendHealth = {
   service: string;
   status: "ok";
@@ -47,4 +49,75 @@ export async function getDemoOperators(signal?: AbortSignal): Promise<DemoOperat
   }
 
   return response.json() as Promise<DemoOperator[]>;
+}
+
+export async function getScenario(scenarioId: string, signal?: AbortSignal): Promise<Scenario> {
+  return requestJSON<Scenario>(
+    `/api/backend/scenarios/${encodeURIComponent(scenarioId)}`,
+    { signal },
+    "Scenario",
+  );
+}
+
+export async function createPlanRun(
+  planningRequest: PlanningRequest,
+  signal?: AbortSignal,
+): Promise<PlanRun> {
+  const run = await requestJSON<PlanRun>(
+    "/api/backend/plan-runs",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(planningRequest),
+      signal,
+    },
+    "Plan creation",
+  );
+  return normalizePlanRun(run);
+}
+
+export async function getPlanRun(runId: string, signal?: AbortSignal): Promise<PlanRun> {
+  const run = await requestJSON<PlanRun>(
+    `/api/backend/plan-runs/${encodeURIComponent(runId)}`,
+    { signal },
+    "Plan run",
+  );
+  return normalizePlanRun(run);
+}
+
+export async function getPlanRuns(scenarioId: string, signal?: AbortSignal): Promise<PlanRun[]> {
+  const runs = await requestJSON<PlanRun[]>(
+    `/api/backend/scenarios/${encodeURIComponent(scenarioId)}/plan-runs?limit=100`,
+    { signal },
+    "Plan runs",
+  );
+  return runs.map(normalizePlanRun);
+}
+
+export function planRunLabel(run: PlanRun, scenario?: Scenario) {
+  if (run.planner === "baseline" && run.active_event_ids.length === 0) return "Normal day";
+  const eventNames = run.active_event_ids
+    .map((eventId) => scenario?.events.find((event) => event.id === eventId)?.name)
+    .filter((name): name is string => Boolean(name));
+  if (eventNames.length > 0) return eventNames.join(" + ");
+  return run.active_event_ids.length > 0 ? "Event-aware plan" : "Operating plan";
+}
+
+async function requestJSON<T>(url: string, init: RequestInit, label: string): Promise<T> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? `${label} returned ${response.status}.`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function normalizePlanRun(run: PlanRun): PlanRun {
+  return {
+    ...run,
+    active_event_ids: run.active_event_ids ?? [],
+    intervals: run.intervals ?? [],
+    contract_outcomes: run.contract_outcomes ?? [],
+    decisions: run.decisions ?? [],
+  };
 }

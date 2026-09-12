@@ -15,3 +15,29 @@ export function backendUnavailable(error: unknown) {
     { status: 502 },
   );
 }
+
+export async function forwardBackendJSON(
+  request: Request,
+  path: string,
+  init: Omit<RequestInit, "signal"> = {},
+) {
+  try {
+    const response = await fetch(getBackendUrl(path), {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...init.headers,
+      },
+      signal: request.signal,
+    });
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        "Content-Type": response.headers.get("Content-Type") ?? "application/json",
+      },
+    });
+  } catch (error) {
+    return backendUnavailable(error);
+  }
+}
