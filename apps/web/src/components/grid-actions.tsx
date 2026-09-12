@@ -1,0 +1,892 @@
+import { Button } from "@getficksd/ui/components/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@getficksd/ui/components/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@getficksd/ui/components/dropdown-menu";
+import { Input } from "@getficksd/ui/components/input";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  BatteryChargingIcon,
+  FileWarningIcon,
+  FuelIcon,
+  HomeIcon,
+  LoaderCircleIcon,
+  PencilIcon,
+  PlayIcon,
+  PlusIcon,
+  ScrollTextIcon,
+  SunIcon,
+  WindIcon,
+} from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+
+import { updateScenario } from "@/lib/backend";
+import type { Scenario } from "@/lib/plan-run";
+
+type AddKind = "battery" | "consumer" | "contract" | "diesel" | "event" | "solar" | "wind";
+type Asset = Scenario["site"]["assets"][number];
+type EditTarget =
+  | { kind: "asset"; id: string }
+  | { kind: "contract"; id: string }
+  | { kind: "event"; id: string }
+  | { kind: "service"; id: string };
+
+const selectClassName =
+  "h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+
+const addItems = [
+  { kind: "solar", label: "Solar array", icon: SunIcon, group: "Supply" },
+  { kind: "wind", label: "Wind turbine", icon: WindIcon, group: "Supply" },
+  {
+    kind: "battery",
+    label: "Battery",
+    icon: BatteryChargingIcon,
+    group: "Supply",
+  },
+  {
+    kind: "diesel",
+    label: "Diesel generator",
+    icon: FuelIcon,
+    group: "Supply",
+  },
+  { kind: "consumer", label: "Consumer", icon: HomeIcon, group: "Demand" },
+  {
+    kind: "contract",
+    label: "Service contract",
+    icon: ScrollTextIcon,
+    group: "Rules",
+  },
+  { kind: "event", label: "Disruption", icon: FileWarningIcon, group: "Rules" },
+] as const;
+
+export function GridActions({
+  scenario,
+  hasRun,
+  isPlanning,
+  onPlan,
+}: {
+  scenario?: Scenario;
+  hasRun: boolean;
+  isPlanning: boolean;
+  onPlan: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [editDraft, setEditDraft] = useState<Scenario | null>(null);
+  const addMutation = useMutation({
+    mutationFn: async (kind: AddKind) => {
+      if (!scenario) throw new Error("The grid is not available.");
+      const next = structuredClone(scenario);
+      const target = addToScenario(next, kind);
+      const savedScenario = await updateScenario(next);
+      return { savedScenario, target };
+    },
+    onSuccess: ({ savedScenario, target }, kind) => {
+      queryClient.setQueryData(["scenario", savedScenario.id], savedScenario);
+      queryClient.setQueryData(["plan-runs", savedScenario.id], []);
+      setEditDraft(structuredClone(savedScenario));
+      setEditTarget(target);
+      toast.success(`${addItems.find((item) => item.kind === kind)?.label ?? "Item"} added`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const editMutation = useMutation({
+    mutationFn: async (next: Scenario) => updateScenario(next),
+    onSuccess: (savedScenario) => {
+      queryClient.setQueryData(["scenario", savedScenario.id], savedScenario);
+      queryClient.setQueryData(["plan-runs", savedScenario.id], []);
+      setEditTarget(null);
+      setEditDraft(null);
+      toast.success("Changes saved");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const disabled = !scenario || addMutation.isPending || editMutation.isPending;
+
+  function startEdit(target: EditTarget) {
+    if (!scenario) return;
+    setEditDraft(structuredClone(scenario));
+    setEditTarget(target);
+  }
+
+  return (
+    <div className="absolute left-4 top-4 z-30 flex items-center gap-2">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 bg-popover/95 shadow-xl backdrop-blur"
+            />
+          }
+          disabled={disabled}
+        >
+          {addMutation.isPending ? <LoaderCircleIcon className="animate-spin" /> : <PlusIcon />}
+          Add
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="w-52" align="start">
+          {(["Supply", "Demand", "Rules"] as const).map((group, groupIndex) => (
+            <div key={group}>
+              {groupIndex > 0 ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{group}</DropdownMenuLabel>
+                {addItems
+                  .filter((item) => item.group === group)
+                  .map((item) => {
+                    const Icon = item.icon;
+                    const itemDisabled =
+                      disabled ||
+                      (item.kind === "contract" && scenario?.site.services.length === 0) ||
+                      (item.kind === "event" && scenario?.signals.length === 0);
+                    return (
+                      <DropdownMenuItem
+                        key={item.kind}
+                        disabled={itemDisabled}
+                        onClick={() => addMutation.mutate(item.kind)}
+                      >
+                        <Icon className="text-muted-foreground" />
+                        {item.label}
+                      </DropdownMenuItem>
+                    );
+                  })}
+              </DropdownMenuGroup>
+            </div>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 bg-popover/95 shadow-xl backdrop-blur"
+            />
+          }
+          disabled={disabled}
+        >
+          <PencilIcon />
+          Edit
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="w-64" align="start">
+          <EditMenu scenario={scenario} onEdit={startEdit} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Button
+        size="sm"
+        className="h-8 gap-2 shadow-xl"
+        disabled={!scenario || isPlanning}
+        onClick={onPlan}
+      >
+        {isPlanning ? <LoaderCircleIcon className="animate-spin" /> : <PlayIcon />}
+        {hasRun ? "Replan" : "Build plan"}
+      </Button>
+
+      <Dialog
+        open={Boolean(editTarget && editDraft)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditTarget(null);
+            setEditDraft(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit {editTarget ? targetLabel(editTarget.kind) : "item"}</DialogTitle>
+            <DialogDescription>
+              Change this item without opening a grid-wide form.
+            </DialogDescription>
+          </DialogHeader>
+          {editTarget && editDraft ? (
+            <ItemEditor scenario={editDraft} target={editTarget} onChange={setEditDraft} />
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditTarget(null);
+                setEditDraft(null);
+              }}
+              disabled={editMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => editDraft && editMutation.mutate(editDraft)}
+              disabled={!editDraft || editMutation.isPending}
+            >
+              {editMutation.isPending ? <LoaderCircleIcon className="animate-spin" /> : null}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function EditMenu({
+  scenario,
+  onEdit,
+}: {
+  scenario?: Scenario;
+  onEdit: (target: EditTarget) => void;
+}) {
+  if (!scenario) return null;
+  const groups = [
+    {
+      label: "Supply",
+      items: scenario.site.assets.map((item) => ({
+        id: item.id,
+        label: item.name,
+        target: { kind: "asset", id: item.id } as const,
+      })),
+    },
+    {
+      label: "Consumers",
+      items: scenario.site.services.map((item) => ({
+        id: item.id,
+        label: item.name,
+        target: { kind: "service", id: item.id } as const,
+      })),
+    },
+    {
+      label: "Contracts",
+      items: scenario.contracts.map((item) => ({
+        id: item.id,
+        label: item.name,
+        target: { kind: "contract", id: item.id } as const,
+      })),
+    },
+    {
+      label: "Disruptions",
+      items: scenario.events.map((item) => ({
+        id: item.id,
+        label: item.name,
+        target: { kind: "event", id: item.id } as const,
+      })),
+    },
+  ];
+
+  return groups.map((group, index) => (
+    <div key={group.label}>
+      {index > 0 ? <DropdownMenuSeparator /> : null}
+      <DropdownMenuGroup>
+        <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+        {group.items.length === 0 ? (
+          <p className="px-1.5 py-1 text-xs text-muted-foreground">None</p>
+        ) : (
+          group.items.map((item) => (
+            <DropdownMenuItem key={item.id} onClick={() => onEdit(item.target)}>
+              {item.label}
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuGroup>
+    </div>
+  ));
+}
+
+function ItemEditor({
+  scenario,
+  target,
+  onChange,
+}: {
+  scenario: Scenario;
+  target: EditTarget;
+  onChange: (scenario: Scenario) => void;
+}) {
+  const update = (change: (next: Scenario) => void) => {
+    const next = structuredClone(scenario);
+    change(next);
+    onChange(next);
+  };
+
+  if (target.kind === "asset") {
+    const asset = scenario.site.assets.find((item) => item.id === target.id);
+    if (!asset) return <MissingItem />;
+    const signal = scenario.signals.find(
+      (item) => item.asset_id === asset.id && item.kind === "renewable_availability",
+    );
+    const state = scenario.initial_state.assets.find((item) => item.asset_id === asset.id);
+    const setAsset = (field: keyof Asset, value: string | number) =>
+      update((next) => {
+        const item = next.site.assets.find((candidate) => candidate.id === asset.id);
+        if (item) (item[field] as typeof value) = value;
+      });
+    return (
+      <div className="grid max-h-[60svh] gap-3 overflow-y-auto py-1 sm:grid-cols-2">
+        <TextField label="Name" value={asset.name} onChange={(value) => setAsset("name", value)} />
+        {asset.type === "solar" || asset.type === "wind" ? (
+          <>
+            <NumberField
+              label="Capacity (kW)"
+              value={asset.capacity_kw}
+              min={0.01}
+              onChange={(value) =>
+                update((next) => {
+                  const item = next.site.assets.find((candidate) => candidate.id === asset.id);
+                  if (item) item.capacity_kw = value;
+                  const forecast = next.signals.find((candidate) => candidate.id === signal?.id);
+                  if (forecast) {
+                    forecast.values = forecast.values.map((output) => Math.min(output, value));
+                  }
+                })
+              }
+            />
+            <NumberField
+              label="Output for each interval (kW)"
+              value={average(signal?.values ?? [])}
+              min={0}
+              max={asset.capacity_kw}
+              onChange={(value) =>
+                update((next) => {
+                  const item = next.signals.find((candidate) => candidate.id === signal?.id);
+                  if (item) item.values = item.values.map(() => value);
+                })
+              }
+            />
+          </>
+        ) : null}
+        {asset.type === "battery" ? (
+          <>
+            <NumberField
+              label="Capacity (kWh)"
+              value={asset.capacity_kwh}
+              min={0.01}
+              onChange={(value) => setAsset("capacity_kwh", value)}
+            />
+            <NumberField
+              label="Stored energy (kWh)"
+              value={state?.stored_energy_kwh}
+              min={0}
+              max={asset.capacity_kwh}
+              onChange={(value) =>
+                update((next) => {
+                  const item = next.initial_state.assets.find(
+                    (candidate) => candidate.asset_id === asset.id,
+                  );
+                  if (item) item.stored_energy_kwh = value;
+                })
+              }
+            />
+          </>
+        ) : null}
+        {asset.type === "diesel" ? (
+          <>
+            <NumberField
+              label="Maximum output (kW)"
+              value={asset.maximum_output_kw}
+              min={0.01}
+              onChange={(value) => setAsset("maximum_output_kw", value)}
+            />
+            <NumberField
+              label="Fuel available (liters)"
+              value={state?.fuel_available_liters}
+              min={0}
+              onChange={(value) =>
+                update((next) => {
+                  const item = next.initial_state.assets.find(
+                    (candidate) => candidate.asset_id === asset.id,
+                  );
+                  if (item) item.fuel_available_liters = value;
+                })
+              }
+            />
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (target.kind === "service") {
+    const service = scenario.site.services.find((item) => item.id === target.id);
+    if (!service) return <MissingItem />;
+    const signal = scenario.signals.find(
+      (item) => item.service_id === service.id && item.kind === "service_demand",
+    );
+    return (
+      <div className="grid gap-3 py-1 sm:grid-cols-2">
+        <TextField
+          label="Name"
+          value={service.name}
+          onChange={(value) =>
+            update((next) => {
+              const item = next.site.services.find((candidate) => candidate.id === service.id);
+              if (item) item.name = value;
+            })
+          }
+        />
+        <TextField
+          label="Description"
+          value={service.description}
+          onChange={(value) =>
+            update((next) => {
+              const item = next.site.services.find((candidate) => candidate.id === service.id);
+              if (item) item.description = value;
+            })
+          }
+        />
+        <NumberField
+          label="Rated power (kW)"
+          value={service.rated_power_kw}
+          min={0.01}
+          onChange={(value) =>
+            update((next) => {
+              const item = next.site.services.find((candidate) => candidate.id === service.id);
+              if (item) item.rated_power_kw = value;
+              const demand = next.signals.find((candidate) => candidate.id === signal?.id);
+              if (demand) demand.values = demand.values.map((power) => Math.min(power, value));
+              next.contracts.forEach((candidate) => {
+                if (
+                  candidate.service_id === service.id &&
+                  candidate.minimum_power_kw !== undefined
+                ) {
+                  candidate.minimum_power_kw = Math.min(candidate.minimum_power_kw, value);
+                }
+              });
+            })
+          }
+        />
+        <NumberField
+          label="Demand for each interval (kW)"
+          value={average(signal?.values ?? [])}
+          min={0}
+          max={service.rated_power_kw}
+          onChange={(value) =>
+            update((next) => {
+              const item = next.signals.find((candidate) => candidate.id === signal?.id);
+              if (item) item.values = item.values.map(() => value);
+            })
+          }
+        />
+        <label className="grid gap-1.5 text-sm font-medium">
+          Control mode
+          <select
+            className={selectClassName}
+            value={service.control_mode}
+            onChange={(event) =>
+              update((next) => {
+                const item = next.site.services.find((candidate) => candidate.id === service.id);
+                if (item) item.control_mode = event.target.value as typeof item.control_mode;
+              })
+            }
+          >
+            <option value="fixed">Fixed</option>
+            <option value="curtailable">Curtailable</option>
+            <option value="shiftable">Shiftable</option>
+          </select>
+        </label>
+      </div>
+    );
+  }
+
+  if (target.kind === "contract") {
+    const contract = scenario.contracts.find((item) => item.id === target.id);
+    if (!contract) return <MissingItem />;
+    const setContract = (field: keyof typeof contract, value: string | number) =>
+      update((next) => {
+        const item = next.contracts.find((candidate) => candidate.id === contract.id);
+        if (item) (item[field] as typeof value) = value;
+      });
+    return (
+      <div className="grid gap-3 py-1 sm:grid-cols-2">
+        <TextField
+          label="Name"
+          value={contract.name}
+          onChange={(value) => setContract("name", value)}
+        />
+        <label className="grid gap-1.5 text-sm font-medium">
+          Consumer
+          <select
+            className={selectClassName}
+            value={contract.service_id}
+            onChange={(event) =>
+              update((next) => {
+                const item = next.contracts.find((candidate) => candidate.id === contract.id);
+                const service = next.site.services.find(
+                  (candidate) => candidate.id === event.target.value,
+                );
+                if (!item || !service) return;
+                item.service_id = service.id;
+                if (item.minimum_power_kw !== undefined) {
+                  item.minimum_power_kw = Math.min(item.minimum_power_kw, service.rated_power_kw);
+                }
+              })
+            }
+          >
+            {scenario.site.services.map((service) => (
+              <option key={service.id} value={service.id}>
+                {service.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium">
+          Priority
+          <select
+            className={selectClassName}
+            value={contract.priority}
+            onChange={(event) => setContract("priority", event.target.value)}
+          >
+            <option value="critical">Critical</option>
+            <option value="essential">Essential</option>
+            <option value="flexible">Flexible</option>
+          </select>
+        </label>
+        {contract.kind === "continuous_power" ? (
+          <NumberField
+            label="Minimum power (kW)"
+            value={contract.minimum_power_kw}
+            min={0.01}
+            max={
+              scenario.site.services.find((service) => service.id === contract.service_id)
+                ?.rated_power_kw
+            }
+            onChange={(value) => setContract("minimum_power_kw", value)}
+          />
+        ) : contract.kind === "runtime_by_deadline" ? (
+          <NumberField
+            label="Required runtime (minutes)"
+            value={contract.required_runtime_minutes}
+            min={1}
+            onChange={(value) => setContract("required_runtime_minutes", value)}
+          />
+        ) : (
+          <NumberField
+            label="Required energy (kWh)"
+            value={contract.required_energy_kwh}
+            min={0.01}
+            onChange={(value) => setContract("required_energy_kwh", value)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  const event = scenario.events.find((item) => item.id === target.id);
+  if (!event) return <MissingItem />;
+  const matchingSignals = scenario.signals.filter((signal) =>
+    event.type === "renewable_shortfall"
+      ? signal.kind === "renewable_availability"
+      : event.type === "demand_surge"
+        ? signal.kind === "service_demand"
+        : signal.kind === "fuel_delivery",
+  );
+  return (
+    <div className="grid gap-3 py-1 sm:grid-cols-2">
+      <TextField
+        label="Name"
+        value={event.name}
+        onChange={(value) =>
+          update((next) => {
+            const item = next.events.find((candidate) => candidate.id === event.id);
+            if (item) item.name = value;
+          })
+        }
+      />
+      <label className="grid gap-1.5 text-sm font-medium">
+        Affected forecast
+        <select
+          className={selectClassName}
+          value={event.signal_id}
+          onChange={(changeEvent) =>
+            update((next) => {
+              const item = next.events.find((candidate) => candidate.id === event.id);
+              if (item) item.signal_id = changeEvent.target.value;
+            })
+          }
+        >
+          {matchingSignals.map((signal) => (
+            <option key={signal.id} value={signal.id}>
+              {signalName(signal, scenario)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {event.type === "renewable_shortfall" ? (
+        <NumberField
+          label="Available output multiplier"
+          value={event.availability_multiplier}
+          min={0}
+          max={1}
+          step={0.05}
+          onChange={(value) =>
+            update((next) => {
+              const item = next.events.find((candidate) => candidate.id === event.id);
+              if (item) item.availability_multiplier = value;
+            })
+          }
+        />
+      ) : event.type === "demand_surge" ? (
+        <NumberField
+          label="Demand multiplier"
+          value={event.demand_multiplier}
+          min={1.01}
+          step={0.05}
+          onChange={(value) =>
+            update((next) => {
+              const item = next.events.find((candidate) => candidate.id === event.id);
+              if (item) item.demand_multiplier = value;
+            })
+          }
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid gap-1.5 text-sm font-medium">
+      {label}
+      <Input value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+}: {
+  label: string;
+  value?: number;
+  onChange: (value: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+}) {
+  return (
+    <label className="grid gap-1.5 text-sm font-medium">
+      {label}
+      <Input
+        type="number"
+        value={value ?? ""}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function MissingItem() {
+  return <p className="text-sm text-destructive">This item no longer exists.</p>;
+}
+
+function targetLabel(kind: EditTarget["kind"]) {
+  return kind === "service" ? "consumer" : kind;
+}
+
+function signalName(signal: Scenario["signals"][number], scenario: Scenario) {
+  if (signal.asset_id) {
+    return scenario.site.assets.find((asset) => asset.id === signal.asset_id)?.name ?? signal.id;
+  }
+  if (signal.service_id) {
+    return (
+      scenario.site.services.find((service) => service.id === signal.service_id)?.name ?? signal.id
+    );
+  }
+  return signal.id;
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return 0;
+  return Math.round((values.reduce((total, value) => total + value, 0) / values.length) * 10) / 10;
+}
+
+function addToScenario(scenario: Scenario, kind: AddKind) {
+  if (kind === "consumer") return addConsumer(scenario);
+  if (kind === "contract") return addContract(scenario);
+  if (kind === "event") return addEvent(scenario);
+  return addAsset(scenario, kind);
+}
+
+function addAsset(scenario: Scenario, type: Asset["type"]) {
+  const id = uniqueId(
+    type,
+    scenario.site.assets.map((asset) => asset.id),
+  );
+  const asset: Asset =
+    type === "solar" || type === "wind"
+      ? { id, name: `New ${type}`, type, capacity_kw: 10 }
+      : type === "battery"
+        ? {
+            id,
+            name: "New battery",
+            type,
+            capacity_kwh: 20,
+            minimum_stored_energy_kwh: 2,
+            max_charge_kw: 10,
+            max_discharge_kw: 10,
+            charge_efficiency: 0.95,
+            discharge_efficiency: 0.95,
+          }
+        : {
+            id,
+            name: "New diesel generator",
+            type,
+            minimum_output_kw: 0,
+            maximum_output_kw: 20,
+            liters_per_kwh: 0.3,
+            fuel_cost_per_liter: 1,
+            emissions_kg_co2_per_liter: 2.68,
+          };
+  scenario.site.assets.push(asset);
+  if (type === "battery") {
+    scenario.initial_state.assets.push({
+      asset_id: id,
+      type,
+      stored_energy_kwh: 10,
+    });
+  }
+  if (type === "diesel") {
+    scenario.initial_state.assets.push({
+      asset_id: id,
+      type,
+      fuel_available_liters: 100,
+      running: false,
+    });
+  }
+  if (type === "solar" || type === "wind") {
+    scenario.signals.push({
+      id: `${id}-forecast`,
+      kind: "renewable_availability",
+      asset_id: id,
+      unit: "kW",
+      values: Array(scenario.horizon.interval_count).fill(0),
+    });
+  }
+  return { kind: "asset", id } as const;
+}
+
+function addConsumer(scenario: Scenario) {
+  const id = uniqueId(
+    "consumer",
+    scenario.site.services.map((service) => service.id),
+  );
+  scenario.site.services.push({
+    id,
+    name: "New consumer",
+    description: "Flexible consumer load",
+    control_mode: "curtailable",
+    rated_power_kw: 5,
+  });
+  scenario.signals.push({
+    id: `${id}-demand`,
+    kind: "service_demand",
+    service_id: id,
+    unit: "kW",
+    values: Array(scenario.horizon.interval_count).fill(0),
+  });
+  return { kind: "service", id } as const;
+}
+
+function addContract(scenario: Scenario) {
+  const id = uniqueId(
+    "contract",
+    scenario.contracts.map((contract) => contract.id),
+  );
+  const service = scenario.site.services[0];
+  scenario.contracts.push({
+    id,
+    name: "New continuous service",
+    service_id: service?.id ?? "",
+    kind: "continuous_power",
+    priority: "essential",
+    window_start: scenario.horizon.starts_at,
+    deadline: horizonEnd(scenario),
+    minimum_power_kw: Math.min(1, service?.rated_power_kw ?? 1),
+  });
+  return { kind: "contract", id } as const;
+}
+
+function addEvent(scenario: Scenario) {
+  const signal =
+    scenario.signals.find((item) => item.kind === "renewable_availability") ??
+    scenario.signals.find((item) => item.kind === "service_demand") ??
+    scenario.signals.find((item) => item.kind === "fuel_delivery");
+  if (!signal) throw new Error("Add a supply forecast or consumer before a disruption.");
+
+  const id = uniqueId(
+    "event",
+    scenario.events.map((event) => event.id),
+  );
+  const start = scenario.horizon.starts_at;
+  const end = horizonEnd(scenario);
+  if (signal.kind === "renewable_availability") {
+    scenario.events.push({
+      id,
+      name: "New renewable shortfall",
+      type: "renewable_shortfall",
+      signal_id: signal.id,
+      start,
+      end,
+      availability_multiplier: 0.8,
+    });
+  } else if (signal.kind === "service_demand") {
+    scenario.events.push({
+      id,
+      name: "New demand surge",
+      type: "demand_surge",
+      signal_id: signal.id,
+      start,
+      end,
+      demand_multiplier: 1.2,
+    });
+  } else {
+    scenario.events.push({
+      id,
+      name: "New fuel delivery delay",
+      type: "fuel_delivery_delay",
+      signal_id: signal.id,
+      scheduled_at: start,
+      delayed_until: end,
+    });
+  }
+  return { kind: "event", id } as const;
+}
+
+function horizonEnd(scenario: Scenario) {
+  return new Date(
+    new Date(scenario.horizon.starts_at).getTime() +
+      scenario.horizon.interval_minutes * scenario.horizon.interval_count * 60_000,
+  ).toISOString();
+}
+
+function uniqueId(prefix: string, existingIds: string[]) {
+  let index = 1;
+  while (existingIds.includes(`${prefix}-${index}`)) index += 1;
+  return `${prefix}-${index}`;
+}

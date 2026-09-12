@@ -1,5 +1,5 @@
 import { Button } from "@getficksd/ui/components/button";
-import { PauseIcon, PlayIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { useMemo, useRef, useState, type PointerEvent } from "react";
 
 import type { PlanRun, Scenario } from "@/lib/plan-run";
@@ -12,19 +12,23 @@ const SAMPLE_COUNT = 97;
 
 type TimeRailProps = {
   currentHour: number;
+  expanded: boolean;
   isPlaying: boolean;
   run?: PlanRun;
   scenario?: Scenario;
   onCurrentHourChange: (hour: number) => void;
+  onExpandedChange: (expanded: boolean) => void;
   onPlayingChange: (isPlaying: boolean) => void;
 };
 
 export function TimeRail({
   currentHour,
+  expanded,
   isPlaying,
   run,
   scenario,
   onCurrentHourChange,
+  onExpandedChange,
   onPlayingChange,
 }: TimeRailProps) {
   const plotRef = useRef<HTMLDivElement>(null);
@@ -32,6 +36,47 @@ export function TimeRail({
   const data = useMemo(() => createTimeRailData(scenario, run), [run, scenario]);
   const cursorX = hourToX(currentHour);
   const deadlineHour = contractDeadlineHour(scenario);
+
+  if (!expanded) {
+    return (
+      <section
+        data-time-rail
+        className="absolute inset-x-0 bottom-0 z-30 h-12 overflow-hidden border-t border-border bg-background/95 backdrop-blur transition-[height] duration-300 ease-out motion-reduce:transition-none"
+        aria-label="Replay controls"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <div
+          key="collapsed"
+          className="flex h-full animate-in items-center gap-2 px-2.5 duration-200 fade-in slide-in-from-top-1 motion-reduce:animate-none"
+        >
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={isPlaying ? "Pause replay" : "Start replay"}
+            onClick={() => onPlayingChange(!isPlaying)}
+          >
+            {isPlaying ? <PauseIcon /> : <PlayIcon />}
+          </Button>
+          <span className="text-xs font-medium text-foreground">
+            {isPlaying ? "Replaying" : "Replay"}
+          </span>
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {formatOperatingTime(currentHour, scenario)}
+          </span>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            className="ml-auto text-muted-foreground"
+            aria-label="Expand replay timeline"
+            aria-expanded={false}
+            onClick={() => onExpandedChange(true)}
+          >
+            <ChevronUpIcon />
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   const setHourFromPointer = (event: PointerEvent<HTMLDivElement>) => {
     const bounds = plotRef.current?.getBoundingClientRect();
@@ -64,17 +109,20 @@ export function TimeRail({
   return (
     <section
       data-time-rail
-      className="absolute inset-x-0 bottom-0 z-30 h-28 border-t border-border bg-background/95 backdrop-blur"
+      className="absolute inset-x-0 bottom-0 z-30 h-28 overflow-hidden border-t border-border bg-background/95 backdrop-blur transition-[height] duration-300 ease-out motion-reduce:transition-none"
       aria-label="Operating day timeline"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="flex h-full">
+      <div
+        key="expanded"
+        className="flex h-full animate-in duration-300 fade-in slide-in-from-bottom-2 motion-reduce:animate-none"
+      >
         <div className="flex w-28 shrink-0 flex-col justify-between border-r border-border p-2.5 sm:w-36">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label={isPlaying ? "Pause operating day" : "Play operating day"}
+              aria-label={isPlaying ? "Pause replay" : "Start replay"}
               onClick={() => onPlayingChange(!isPlaying)}
             >
               {isPlaying ? <PauseIcon /> : <PlayIcon />}
@@ -101,7 +149,7 @@ export function TimeRail({
           onPointerUp={endScrub}
           onPointerCancel={endScrub}
         >
-          <div className="pointer-events-none absolute inset-x-0 top-2 grid grid-cols-5 font-mono text-[9px] text-muted-foreground">
+          <div className="pointer-events-none absolute left-0 right-10 top-2 grid grid-cols-5 font-mono text-[9px] text-muted-foreground">
             {[0, 6, 12, 18, 24].map((hour) => (
               <span key={hour} className="text-center first:text-left last:text-right">
                 {formatOperatingTime(hour, scenario)}
@@ -200,6 +248,16 @@ export function TimeRail({
           </span>
         </div>
       </div>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        className="absolute right-2 top-2 z-10 text-muted-foreground"
+        aria-label="Collapse replay timeline"
+        aria-expanded={true}
+        onClick={() => onExpandedChange(false)}
+      >
+        <ChevronDownIcon />
+      </Button>
     </section>
   );
 }
@@ -249,6 +307,80 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
   const serviceDemand = interval
     ? interval.services.reduce((total, item) => total + item.requested_kw, 0)
     : signalValue(scenario, "service_demand", index);
+  const renewableOutputByAsset = Object.fromEntries(
+    (scenario?.site.assets ?? [])
+      .filter((asset) => asset.type === "solar" || asset.type === "wind")
+      .map((asset) => [
+        asset.id,
+        round(
+          interval?.renewables.find((item) => item.asset_id === asset.id)?.used_kw ??
+            signalValue(scenario, "renewable_availability", index, asset.id),
+        ),
+      ]),
+  );
+  const batteriesByAsset = Object.fromEntries(
+    (scenario?.site.assets ?? [])
+      .filter((asset) => asset.type === "battery")
+      .map((asset) => {
+        const dispatch = interval?.batteries.find((item) => item.asset_id === asset.id);
+        const energy =
+          dispatch?.ending_energy_kwh ??
+          initialAssetState(scenario, asset.id)?.stored_energy_kwh ??
+          0;
+        const capacity = asset.capacity_kwh ?? 0;
+        return [
+          asset.id,
+          {
+            energyKwh: round(energy),
+            capacityKwh: round(capacity),
+            percent: capacity > 0 ? Math.round((energy / capacity) * 100) : 0,
+          },
+        ];
+      }),
+  );
+  const generatorsByAsset = Object.fromEntries(
+    (scenario?.site.assets ?? [])
+      .filter((asset) => asset.type === "diesel")
+      .map((asset) => {
+        const dispatch = interval?.generators.find((item) => item.asset_id === asset.id);
+        return [
+          asset.id,
+          {
+            running: dispatch?.running ?? false,
+            outputKw: round(dispatch?.output_kw ?? 0),
+            capacityKw: round(asset.maximum_output_kw ?? 0),
+            fuelLiters: round(
+              dispatch?.fuel_remaining_liters ??
+                initialAssetState(scenario, asset.id)?.fuel_available_liters ??
+                0,
+            ),
+          },
+        ];
+      }),
+  );
+  const servicesByID = Object.fromEntries(
+    (scenario?.site.services ?? []).map((service) => {
+      const delivery = interval?.services.find((item) => item.service_id === service.id);
+      return [
+        service.id,
+        {
+          requestedKw: round(
+            delivery?.requested_kw ?? demandForService(scenario, service.id, index),
+          ),
+          deliveredKw: round(
+            delivery?.delivered_kw ?? demandForService(scenario, service.id, index),
+          ),
+          deferredKw: round((delivery?.deferred_kw ?? 0) + (delivery?.unserved_kw ?? 0)),
+        },
+      ];
+    }),
+  );
+  const contractsByService = Object.fromEntries(
+    (scenario?.contracts ?? []).map((contract) => [
+      contract.service_id,
+      interval?.contracts.find((item) => item.contract_id === contract.id),
+    ]),
+  );
   return {
     solarKw: round(
       solarOutput ?? signalValue(scenario, "renewable_availability", index, solar?.id),
@@ -277,6 +409,11 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
       interval?.contracts.some(
         (contract) => contract.status === "at_risk" || contract.status === "breached",
       ) ?? false,
+    renewableOutputByAsset,
+    batteriesByAsset,
+    generatorsByAsset,
+    servicesByID,
+    contractsByService,
   };
 }
 

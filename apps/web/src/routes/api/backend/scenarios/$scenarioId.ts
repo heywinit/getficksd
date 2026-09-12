@@ -7,6 +7,12 @@ export const Route = createFileRoute("/api/backend/scenarios/$scenarioId")({
     handlers: {
       GET: async ({ params, request }) =>
         forwardBackendJSON(request, `/v1/scenarios/${encodeURIComponent(params.scenarioId)}`),
+      PUT: async ({ params, request }) =>
+        forwardBackendJSON(request, `/v1/scenarios/${encodeURIComponent(params.scenarioId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: await request.text(),
+        }),
     },
   },
 });

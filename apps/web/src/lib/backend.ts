@@ -59,6 +59,19 @@ export async function getScenario(scenarioId: string, signal?: AbortSignal): Pro
   );
 }
 
+export async function updateScenario(scenario: Scenario, signal?: AbortSignal): Promise<Scenario> {
+  return requestJSON<Scenario>(
+    `/api/backend/scenarios/${encodeURIComponent(scenario.id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(scenario),
+      signal,
+    },
+    "Scenario update",
+  );
+}
+
 export async function createPlanRun(
   planningRequest: PlanningRequest,
   signal?: AbortSignal,
@@ -106,7 +119,9 @@ export function planRunLabel(run: PlanRun, scenario?: Scenario) {
 async function requestJSON<T>(url: string, init: RequestInit, label: string): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    const body = (await response.json().catch(() => null)) as {
+      message?: string;
+    } | null;
     throw new Error(body?.message ?? `${label} returned ${response.status}.`);
   }
   return response.json() as Promise<T>;

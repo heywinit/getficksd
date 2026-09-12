@@ -5,7 +5,6 @@ import {
   DropletsIcon,
   FuelIcon,
   GaugeIcon,
-  Grid2X2Icon,
   HomeIcon,
   LocateFixedIcon,
   MinusIcon,
@@ -25,12 +24,15 @@ const WORLD_WIDTH = 1480;
 const WORLD_HEIGHT = 688;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 2;
-const UNIT_SIZE = 40;
 
 export type CanvasView = "activity" | "architecture" | "forecast";
 
 type CanvasNode = {
   id: string;
+  kind?: "asset" | "controller" | "service";
+  resourceId?: string;
+  assetType?: Scenario["site"]["assets"][number]["type"];
+  serviceMode?: Scenario["site"]["services"][number]["control_mode"];
   title: string;
   detail: string;
   metric: string;
@@ -66,25 +68,7 @@ type DragState =
       nodeId: string;
       offsetX: number;
       offsetY: number;
-      startX: number;
-      startY: number;
-      moved: boolean;
     };
-
-type SourceUnit = {
-  id: string;
-  parentId: "solar" | "wind";
-  number: number;
-  side: "bottom" | "left" | "right" | "top";
-  size: number;
-  x: number;
-  y: number;
-};
-
-const sourceUnitCounts = {
-  solar: 6,
-  wind: 4,
-} as const;
 
 const initialNodes: CanvasNode[] = [
   {
@@ -193,51 +177,151 @@ const initialNodes: CanvasNode[] = [
   },
 ];
 
-const connections = [
-  ["solar", "battery"],
-  ["wind", "battery"],
-  ["battery", "controller"],
-  ["diesel", "controller"],
-  ["controller", "clinic"],
-  ["controller", "water"],
-  ["controller", "homes"],
-] as const;
+function createCanvasNodes(scenario?: Scenario): CanvasNode[] {
+  if (!scenario) return initialNodes;
+
+  const assetTemplates: Record<NonNullable<CanvasNode["assetType"]>, CanvasNode> = {
+    solar: initialNodes[0],
+    wind: initialNodes[1],
+    battery: initialNodes[2],
+    diesel: initialNodes[3],
+  };
+  const serviceTemplates: Record<NonNullable<CanvasNode["serviceMode"]>, CanvasNode> = {
+    fixed: initialNodes[5],
+    shiftable: initialNodes[6],
+    curtailable: initialNodes[7],
+  };
+  const typeCounts = new Map<CanvasNode["assetType"], number>();
+  const modeCounts = new Map<CanvasNode["serviceMode"], number>();
+  let extraAssetCount = 0;
+  let extraServiceCount = 0;
+  const assets = scenario.site.assets.map((asset) => {
+    const index = typeCounts.get(asset.type) ?? 0;
+    typeCounts.set(asset.type, index + 1);
+    const template = assetTemplates[asset.type];
+    const position = index === 0 ? template : extraAssetPosition(extraAssetCount++);
+    return {
+      ...template,
+      ...position,
+      id: `asset:${asset.id}`,
+      kind: "asset" as const,
+      resourceId: asset.id,
+      assetType: asset.type,
+      title: asset.name,
+      detail:
+        asset.type === "battery"
+          ? "Energy storage"
+          : asset.type === "diesel"
+            ? "Dispatchable supply"
+            : "Renewable supply",
+    };
+  });
+  const controller = {
+    ...initialNodes[4],
+    id: "controller",
+    kind: "controller" as const,
+    detail: scenario.site.name,
+  };
+  const services = scenario.site.services.map((service) => {
+    const index = modeCounts.get(service.control_mode) ?? 0;
+    modeCounts.set(service.control_mode, index + 1);
+    const template = serviceTemplates[service.control_mode];
+    const position = index === 0 ? template : extraServicePosition(extraServiceCount++);
+    return {
+      ...template,
+      ...position,
+      id: `service:${service.id}`,
+      kind: "service" as const,
+      resourceId: service.id,
+      serviceMode: service.control_mode,
+      title: service.name,
+      detail: service.description || `${service.control_mode} service`,
+      metric: `${service.rated_power_kw} kW rated`,
+    };
+  });
+  return [...assets, controller, ...services];
+}
+
+function extraAssetPosition(index: number) {
+  return { x: 64 + (index % 3) * 312, y: 704 + Math.floor(index / 3) * 208 };
+}
+
+function extraServicePosition(index: number) {
+  return { x: 1040 + (index % 2) * 236, y: 704 + Math.floor(index / 2) * 192 };
+}
+
+function canvasConnections(nodes: CanvasNode[]): Array<[string, string]> {
+  const controller = nodes.find((node) => node.kind === "controller" || node.id === "controller");
+  if (!controller) return [];
+  return nodes.flatMap((node): Array<[string, string]> => {
+    if (node.id === controller.id) return [];
+    return node.kind === "service" ? [[controller.id, node.id]] : [[node.id, controller.id]];
+  });
+}
+
+function worldSize(nodes: CanvasNode[]) {
+  return nodes.reduce(
+    (size, node) => ({
+      width: Math.max(size.width, node.x + node.width + 48),
+      height: Math.max(size.height, node.y + node.height + 48),
+    }),
+    { width: WORLD_WIDTH, height: WORLD_HEIGHT },
+  );
+}
 
 export function DeploymentCanvas({
   view = "architecture",
   scenario,
   run,
+  onViewChange,
 }: {
   view?: CanvasView;
   scenario?: Scenario;
   run?: PlanRun;
+  onViewChange?: (view: CanvasView) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const [nodes, setNodes] = useState(initialNodes);
-  const [transform, setTransform] = useState<CanvasTransform>({ x: 32, y: 24, scale: 0.9 });
+  const [nodes, setNodes] = useState(() => createCanvasNodes(scenario));
+  const [transform, setTransform] = useState<CanvasTransform>({
+    x: 32,
+    y: 24,
+    scale: 0.9,
+  });
   const [drag, setDrag] = useState<DragState | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>("controller");
-  const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
+  const [isTimelineExpanded, setIsTimelineExpanded] = useState(false);
   const [currentHour, setCurrentHour] = useState(10.5);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const canvasSize = useMemo(() => worldSize(nodes), [nodes]);
+
+  useEffect(() => {
+    const nextNodes = createCanvasNodes(scenario);
+    setNodes((current) => {
+      const positions = new Map(current.map((node) => [node.id, { x: node.x, y: node.y }]));
+      return nextNodes.map((node) => ({ ...node, ...positions.get(node.id) }));
+    });
+    setSelectedNode((current) =>
+      nextNodes.some((node) => node.id === current) ? current : "controller",
+    );
+  }, [scenario]);
 
   const fitView = useCallback(() => {
     const bounds = canvasRef.current?.getBoundingClientRect();
     if (!bounds) return;
 
-    const availableHeight = Math.max(280, bounds.height - 112);
+    const availableHeight = bounds.height;
     const scale = clamp(
-      Math.min((bounds.width - 96) / WORLD_WIDTH, (availableHeight - 64) / WORLD_HEIGHT),
+      Math.min((bounds.width - 96) / canvasSize.width, (availableHeight - 64) / canvasSize.height),
       MIN_SCALE,
       1,
     );
 
     setTransform({
       scale,
-      x: bounds.width < 768 ? 24 : Math.round((bounds.width - WORLD_WIDTH * scale) / 2),
-      y: Math.max(24, Math.round((availableHeight - WORLD_HEIGHT * scale) / 2)),
+      x: bounds.width < 768 ? 24 : Math.round((bounds.width - canvasSize.width * scale) / 2),
+      y: Math.max(24, Math.round((availableHeight - canvasSize.height * scale) / 2)),
     });
-  }, []);
+  }, [canvasSize]);
 
   useEffect(() => {
     fitView();
@@ -284,41 +368,25 @@ export function DeploymentCanvas({
   }, []);
 
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!run || !isPlaying) return;
     const timer = window.setInterval(() => {
       setCurrentHour((hour) => (hour >= 24 ? 0 : hour + 1 / 60));
     }, 100);
     return () => window.clearInterval(timer);
-  }, [isPlaying]);
+  }, [isPlaying, run]);
 
   const operatingState = useMemo(
     () => operatingStateAt(currentHour, scenario, run),
     [currentHour, run, scenario],
   );
   const sceneNodes = useMemo(
-    () =>
-      nodes.map((node) =>
-        applyCanvasView(
-          applyOperatingState(applyScenarioMetadata(node, scenario), operatingState),
-          view,
-        ),
-      ),
-    [nodes, operatingState, scenario, view],
+    () => nodes.map((node) => applyCanvasView(applyOperatingState(node, operatingState), view)),
+    [nodes, operatingState, view],
   );
   const nodeLookup = useMemo(
     () => new Map(sceneNodes.map((node) => [node.id, node])),
     [sceneNodes],
   );
-  const sourceUnits = useMemo(
-    () =>
-      sceneNodes.flatMap((node) =>
-        isExpandableSource(node.id) && expandedSources.has(node.id)
-          ? createSourceUnits(node, sourceUnitCounts[node.id])
-          : [],
-      ),
-    [expandedSources, sceneNodes],
-  );
-
   const startCanvasDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     canvasRef.current?.setPointerCapture(event.pointerId);
@@ -349,9 +417,6 @@ export function DeploymentCanvas({
       nodeId: node.id,
       offsetX: pointerX - node.x,
       offsetY: pointerY - node.y,
-      startX: event.clientX,
-      startY: event.clientY,
-      moved: false,
     });
   };
 
@@ -371,14 +436,8 @@ export function DeploymentCanvas({
     if (!bounds) return;
     const pointerX = (event.clientX - bounds.left - transform.x) / transform.scale;
     const pointerY = (event.clientY - bounds.top - transform.y) / transform.scale;
-    const moved =
-      drag.moved || Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 5;
     const x = snap(pointerX - drag.offsetX);
     const y = snap(pointerY - drag.offsetY);
-
-    if (moved !== drag.moved) {
-      setDrag({ ...drag, moved });
-    }
 
     setNodes((current) =>
       current.map((node) => (node.id === drag.nodeId ? { ...node, x, y } : node)),
@@ -390,23 +449,7 @@ export function DeploymentCanvas({
     if (canvasRef.current?.hasPointerCapture(event.pointerId)) {
       canvasRef.current.releasePointerCapture(event.pointerId);
     }
-    const nodeMoved =
-      drag.type === "node" &&
-      (drag.moved || Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 5);
-    if (drag.type === "node" && !nodeMoved && isExpandableSource(drag.nodeId)) {
-      toggleSource(drag.nodeId);
-    }
     setDrag(null);
-  };
-
-  const toggleSource = (nodeId: string) => {
-    if (!isExpandableSource(nodeId)) return;
-    setExpandedSources((current) => {
-      const next = new Set(current);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
-      return next;
-    });
   };
 
   const changeZoom = (nextScale: number) => {
@@ -424,16 +467,15 @@ export function DeploymentCanvas({
   };
 
   const resetLayout = () => {
-    setNodes(initialNodes);
+    setNodes(createCanvasNodes(scenario));
     setSelectedNode("controller");
-    setExpandedSources(new Set());
     fitView();
   };
 
   return (
     <div
       ref={canvasRef}
-      className={`relative min-h-0 flex-1 touch-none overflow-hidden bg-background select-none ${drag?.type === "canvas" ? "cursor-grabbing" : "cursor-grab"}`}
+      className={`relative h-full min-h-0 w-full touch-none overflow-hidden bg-background select-none ${drag?.type === "canvas" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage:
           "radial-gradient(circle, color-mix(in oklch, var(--muted-foreground) 24%, transparent) 1px, transparent 1.2px)",
@@ -446,18 +488,47 @@ export function DeploymentCanvas({
       onPointerCancel={endDrag}
     >
       <div
+        className="absolute right-4 top-4 z-20 flex rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur"
+        role="group"
+        aria-label="Canvas view"
+      >
+        {(
+          [
+            ["architecture", "System"],
+            ["forecast", "Supply"],
+            ["activity", "Loads"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              view === value
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            aria-pressed={view === value}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => onViewChange?.(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div
         className="absolute left-0 top-0"
         style={{
-          width: WORLD_WIDTH,
-          height: WORLD_HEIGHT,
+          width: canvasSize.width,
+          height: canvasSize.height,
           transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
           transformOrigin: "0 0",
         }}
       >
         <svg
           className="pointer-events-none absolute inset-0 overflow-visible"
-          width={WORLD_WIDTH}
-          height={WORLD_HEIGHT}
+          width={canvasSize.width}
+          height={canvasSize.height}
           aria-hidden="true"
         >
           <defs>
@@ -473,12 +544,16 @@ export function DeploymentCanvas({
               <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--muted-foreground)" fillOpacity="0.8" />
             </marker>
           </defs>
-          {connections.map(([fromId, toId]) => {
+          {canvasConnections(sceneNodes).map(([fromId, toId]) => {
             const from = nodeLookup.get(fromId);
             const to = nodeLookup.get(toId);
             if (!from || !to) return null;
-            const emphasized = connectionIsEmphasized(fromId, toId, view);
-            const dieselActive = fromId === "diesel" && operatingState.dieselOn;
+            const emphasized = connectionIsEmphasized(from, to, view);
+            const dieselActive =
+              from.assetType === "diesel" &&
+              Boolean(
+                from.resourceId && operatingState.generatorsByAsset[from.resourceId]?.running,
+              );
             return (
               <path
                 key={`${fromId}-${toId}`}
@@ -492,50 +567,24 @@ export function DeploymentCanvas({
               />
             );
           })}
-          {sourceUnits.map((unit) => {
-            const parent = nodeLookup.get(unit.parentId);
-            if (!parent) return null;
-            return (
-              <path
-                key={`${unit.id}-connection`}
-                d={unitConnectionPath(parent, unit)}
-                fill="none"
-                stroke={accentForNode(unit.parentId)}
-                strokeOpacity="0.48"
-                strokeWidth="1.25"
-              />
-            );
-          })}
         </svg>
-
-        {sourceUnits.map((unit) => (
-          <SourceUnitCard key={unit.id} unit={unit} />
-        ))}
 
         {sceneNodes.map((node) => (
           <ServiceCard
             key={node.id}
             node={node}
             selected={selectedNode === node.id}
-            expanded={expandedSources.has(node.id)}
-            dieselLitres={operatingState.dieselFuelLiters}
-            onToggle={() => toggleSource(node.id)}
+            dieselLitres={
+              node.assetType === "diesel" && node.resourceId
+                ? (operatingState.generatorsByAsset[node.resourceId]?.fuelLiters ?? 0)
+                : 0
+            }
             onPointerDown={(event) => startNodeDrag(event, node)}
           />
         ))}
       </div>
 
-      <div className="absolute left-4 top-4 flex flex-col gap-2">
-        <div className="rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur">
-          <Button
-            size="icon"
-            variant="ghost"
-            className="text-muted-foreground"
-            aria-label="Canvas tool"
-          >
-            <Grid2X2Icon />
-          </Button>
-        </div>
+      <div className="absolute left-4 top-16 flex flex-col gap-2">
         <div className="flex flex-col rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur">
           <Button
             size="icon"
@@ -580,14 +629,18 @@ export function DeploymentCanvas({
         </div>
       </div>
 
-      <TimeRail
-        currentHour={currentHour}
-        isPlaying={isPlaying}
-        run={run}
-        scenario={scenario}
-        onCurrentHourChange={setCurrentHour}
-        onPlayingChange={setIsPlaying}
-      />
+      {run ? (
+        <TimeRail
+          currentHour={currentHour}
+          expanded={isTimelineExpanded}
+          isPlaying={isPlaying}
+          run={run}
+          scenario={scenario}
+          onCurrentHourChange={setCurrentHour}
+          onExpandedChange={setIsTimelineExpanded}
+          onPlayingChange={setIsPlaying}
+        />
+      ) : null}
     </div>
   );
 }
@@ -595,28 +648,23 @@ export function DeploymentCanvas({
 function ServiceCard({
   node,
   selected,
-  expanded,
   dieselLitres,
-  onToggle,
   onPointerDown,
 }: {
   node: CanvasNode;
   selected: boolean;
-  expanded: boolean;
   dieselLitres: number;
-  onToggle: () => void;
   onPointerDown: (event: PointerEvent<HTMLElement>) => void;
 }) {
   const Icon = node.icon;
   const metric = metricParts(node);
-  const accent = accentForNode(node.id);
+  const accent = accentForNode(node);
   const compact = node.height <= 144;
   const spacious = node.height >= 176;
-  const unitCount = isExpandableSource(node.id) ? sourceUnitCounts[node.id] : null;
   const radius =
-    node.id === "solar"
+    node.assetType === "solar"
       ? "rounded-[28px]"
-      : node.id === "controller"
+      : node.kind === "controller" || node.id === "controller"
         ? "rounded-[24px]"
         : compact
           ? "rounded-[18px]"
@@ -633,16 +681,6 @@ function ServiceCard({
         boxShadow: selected
           ? "inset 0 1px 0 color-mix(in oklch, var(--foreground) 11%, transparent), 0 24px 54px -24px color-mix(in oklch, var(--foreground) 32%, transparent), 0 10px 22px -14px color-mix(in oklch, var(--foreground) 24%, transparent)"
           : "inset 0 1px 0 color-mix(in oklch, var(--foreground) 9%, transparent), 0 18px 42px -22px color-mix(in oklch, var(--foreground) 28%, transparent), 0 8px 18px -13px color-mix(in oklch, var(--foreground) 20%, transparent)",
-      }}
-      aria-expanded={unitCount === null ? undefined : expanded}
-      aria-label={unitCount === null ? undefined : `${node.title}, ${unitCount} units`}
-      role={unitCount === null ? undefined : "button"}
-      tabIndex={unitCount === null ? undefined : 0}
-      onKeyDown={(event) => {
-        if (unitCount !== null && (event.key === "Enter" || event.key === " ")) {
-          event.preventDefault();
-          onToggle();
-        }
       }}
       onPointerDown={onPointerDown}
     >
@@ -662,15 +700,7 @@ function ServiceCard({
           <span className="block truncate text-sm font-semibold text-card-foreground">
             {node.title}
           </span>
-          <span className="block truncate text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            {node.detail}
-          </span>
         </span>
-        {unitCount !== null ? (
-          <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-1 font-mono text-[9px] text-muted-foreground">
-            {expanded ? "Hide" : `${unitCount} units`}
-          </span>
-        ) : null}
       </span>
 
       <span className={`relative block min-h-0 flex-1 ${compact ? "px-3 pt-1.5" : "px-4 pt-3"}`}>
@@ -682,7 +712,7 @@ function ServiceCard({
           </span>
           <span className="max-w-24 truncate text-[10px] text-muted-foreground">{metric.unit}</span>
         </span>
-        {node.id === "diesel" ? (
+        {node.assetType === "diesel" || node.id === "diesel" ? (
           <DieselIntake litres={dieselLitres} status={node.status} statusTone={node.statusTone} />
         ) : (
           <>
@@ -692,32 +722,6 @@ function ServiceCard({
         )}
       </span>
     </article>
-  );
-}
-
-function SourceUnitCard({ unit }: { unit: SourceUnit }) {
-  const isSolar = unit.parentId === "solar";
-  const Icon = isSolar ? SunIcon : WindIcon;
-  const accent = accentForNode(unit.parentId);
-
-  return (
-    <div
-      className={`absolute grid animate-in place-items-center rounded-xl border fade-in zoom-in-95 duration-200 ${isSolar ? "border-chart-1 bg-chart-1" : "border-chart-2 bg-chart-2"}`}
-      style={{
-        width: unit.size,
-        height: unit.size,
-        left: unit.x,
-        top: unit.y,
-        color: "var(--foreground)",
-        boxShadow: `inset 0 1px 0 color-mix(in oklch, var(--background) 30%, transparent), 0 12px 24px -12px color-mix(in oklch, ${accent} 48%, transparent)`,
-      }}
-      title={`${isSolar ? "Solar panel" : "Wind turbine"} ${unit.number}`}
-    >
-      <Icon className="absolute size-6 opacity-20" />
-      <span className="relative font-mono text-[11px] font-semibold">
-        {String(unit.number).padStart(2, "0")}
-      </span>
-    </div>
   );
 }
 
@@ -736,7 +740,9 @@ function StatusPill({
     >
       <span
         className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: node.statusTone === "warning" ? "var(--destructive)" : accent }}
+        style={{
+          backgroundColor: node.statusTone === "warning" ? "var(--destructive)" : accent,
+        }}
       />
       <span className="truncate">{node.status}</span>
     </span>
@@ -773,7 +779,7 @@ function DieselIntake({
 }
 
 function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
-  if (node.id === "battery") {
+  if (node.assetType === "battery" || node.id === "battery") {
     const percent = Number.parseInt(node.status, 10) || 0;
     return (
       <span className="absolute bottom-3 right-3 grid w-20 gap-1">
@@ -785,7 +791,7 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
     );
   }
 
-  if (node.id === "diesel") {
+  if (node.assetType === "diesel" || node.id === "diesel") {
     const active = node.statusTone === "active";
     return (
       <span className="absolute bottom-3 right-3 flex items-end gap-1">
@@ -800,7 +806,7 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
     );
   }
 
-  if (node.id === "water") {
+  if (node.serviceMode === "shiftable" || node.id === "water") {
     return (
       <span className="absolute bottom-3 right-3 grid w-16 gap-1">
         <span className="font-mono text-[9px] text-chart-2">06:00</span>
@@ -813,7 +819,7 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
     );
   }
 
-  if (node.id === "clinic") {
+  if (node.serviceMode === "fixed" || node.id === "clinic") {
     return (
       <span className="absolute bottom-3 right-3 grid size-10 place-items-center rounded-full border border-destructive/30 bg-destructive/10 text-sm font-medium text-destructive">
         24h
@@ -827,7 +833,17 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
     controller: "M0 38 C17 37 26 22 39 25 C55 30 64 18 75 20 C85 22 89 10 100 13 L100 48 L0 48 Z",
     homes: "M0 39 C16 34 27 16 43 23 C61 32 68 37 77 24 C87 9 93 18 100 6 L100 48 L0 48 Z",
   };
-  const path = paths[node.id];
+  const path =
+    paths[node.id] ??
+    (node.assetType === "solar"
+      ? paths.solar
+      : node.assetType === "wind"
+        ? paths.wind
+        : node.kind === "controller"
+          ? paths.controller
+          : node.serviceMode === "curtailable"
+            ? paths.homes
+            : undefined);
   if (!path) return null;
 
   return (
@@ -844,7 +860,7 @@ function NodeVisual({ node, accent }: { node: CanvasNode; accent: string }) {
 }
 
 function metricParts(node: CanvasNode) {
-  if (node.id === "controller") {
+  if (node.kind === "controller" || node.id === "controller") {
     const match = node.metric.match(/Demand (\d+) kW/);
     return { value: match?.[1] ?? node.metric, unit: match ? "kW demand" : "" };
   }
@@ -853,18 +869,16 @@ function metricParts(node: CanvasNode) {
   return { value: match?.[1] ?? node.metric, unit: match?.[2] ?? "" };
 }
 
-function accentForNode(nodeId: string) {
-  const colors: Record<string, string> = {
-    solar: "var(--chart-1)",
-    wind: "var(--chart-2)",
-    battery: "var(--chart-3)",
-    diesel: "var(--chart-4)",
-    controller: "var(--chart-5)",
-    clinic: "var(--destructive)",
-    water: "var(--chart-2)",
-    homes: "var(--chart-5)",
-  };
-  return colors[nodeId] ?? "var(--primary)";
+function accentForNode(node: CanvasNode) {
+  if (node.assetType === "solar" || node.id === "solar") return "var(--chart-1)";
+  if (node.assetType === "wind" || node.id === "wind") return "var(--chart-2)";
+  if (node.assetType === "battery" || node.id === "battery") return "var(--chart-3)";
+  if (node.assetType === "diesel" || node.id === "diesel") return "var(--chart-4)";
+  if (node.serviceMode === "fixed" || node.id === "clinic") return "var(--destructive)";
+  if (node.serviceMode === "shiftable" || node.id === "water") return "var(--chart-2)";
+  if (node.serviceMode === "curtailable" || node.id === "homes") return "var(--chart-5)";
+  if (node.kind === "controller" || node.id === "controller") return "var(--chart-5)";
+  return "var(--primary)";
 }
 
 function connectionPath(from: CanvasNode, to: CanvasNode) {
@@ -890,82 +904,61 @@ function connectionPath(from: CanvasNode, to: CanvasNode) {
   return `M ${fromCenterX} ${startY} C ${fromCenterX} ${startY + bend}, ${toCenterX} ${endY - bend}, ${toCenterX} ${endY}`;
 }
 
-function isExpandableSource(nodeId: string): nodeId is keyof typeof sourceUnitCounts {
-  return nodeId === "solar" || nodeId === "wind";
-}
-
-function createSourceUnits(parent: CanvasNode, count: number): SourceUnit[] {
-  const parentId = parent.id as SourceUnit["parentId"];
-
-  if (parentId === "solar") {
-    const rowCount = count / 2;
-    const gap = 32;
-    const rowWidth = rowCount * UNIT_SIZE + (rowCount - 1) * gap;
-    const startX = parent.x + (parent.width - rowWidth) / 2;
-
-    return Array.from({ length: count }, (_, index) => {
-      const side = index < rowCount ? "top" : "bottom";
-      const rowIndex = index % rowCount;
-      return {
-        id: `${parentId}-unit-${index + 1}`,
-        parentId,
-        number: index + 1,
-        side,
-        size: UNIT_SIZE,
-        x: startX + rowIndex * (UNIT_SIZE + gap),
-        y: side === "top" ? parent.y - UNIT_SIZE - 28 : parent.y + parent.height + 28,
-      };
-    });
-  }
-
-  const edgeCount = count / 2;
-  const gap = 24;
-  const bottomGap = 32;
-  const bottomWidth = edgeCount * UNIT_SIZE + (edgeCount - 1) * bottomGap;
-  const bottomStartX = parent.x + (parent.width - bottomWidth) / 2;
-  const columnHeight = edgeCount * UNIT_SIZE + (edgeCount - 1) * gap;
-  const startY = parent.y + (parent.height - columnHeight) / 2;
-
-  return Array.from({ length: count }, (_, index) => {
-    const side = index < edgeCount ? "left" : "bottom";
-    const edgeIndex = index % edgeCount;
-    return {
-      id: `${parentId}-unit-${index + 1}`,
-      parentId,
-      number: index + 1,
-      side,
-      size: UNIT_SIZE,
-      x:
-        side === "left"
-          ? parent.x - UNIT_SIZE - 28
-          : bottomStartX + edgeIndex * (UNIT_SIZE + bottomGap),
-      y: side === "left" ? startY + edgeIndex * (UNIT_SIZE + gap) : parent.y + parent.height + 28,
-    };
-  });
-}
-
-function unitConnectionPath(parent: CanvasNode, unit: SourceUnit) {
-  if (unit.side === "top") {
-    const x = unit.x + unit.size / 2;
-    return `M ${x} ${unit.y + unit.size} L ${x} ${parent.y}`;
-  }
-  if (unit.side === "bottom") {
-    const x = unit.x + unit.size / 2;
-    return `M ${x} ${unit.y} L ${x} ${parent.y + parent.height}`;
-  }
-  if (unit.side === "left") {
-    const y = unit.y + unit.size / 2;
-    return `M ${unit.x + unit.size} ${y} L ${parent.x} ${y}`;
-  }
-
-  const y = unit.y + unit.size / 2;
-  return `M ${unit.x} ${y} L ${parent.x + parent.width} ${y}`;
-}
-
 function applyOperatingState(
   node: CanvasNode,
   state: ReturnType<typeof operatingStateAt>,
 ): CanvasNode {
+  if (node.kind === "asset" && node.resourceId) {
+    if (node.assetType === "solar" || node.assetType === "wind") {
+      const output = state.renewableOutputByAsset[node.resourceId] ?? 0;
+      return {
+        ...node,
+        metric: `${output} kW producing`,
+        status: output < 0.1 ? "Forecast at zero" : "Forecast online",
+        dimmed: output < 0.1,
+      };
+    }
+    if (node.assetType === "battery") {
+      const battery = state.batteriesByAsset[node.resourceId];
+      return {
+        ...node,
+        metric: `${battery?.energyKwh ?? 0} / ${battery?.capacityKwh ?? 0} kWh`,
+        status: `${battery?.percent ?? 0}% charged`,
+        statusTone: (battery?.percent ?? 0) < 25 ? "warning" : "normal",
+      };
+    }
+    if (node.assetType === "diesel") {
+      const generator = state.generatorsByAsset[node.resourceId];
+      return {
+        ...node,
+        metric: generator?.running
+          ? `${generator.outputKw} kW output`
+          : `${generator?.capacityKw ?? 0} kW capacity`,
+        status: generator?.running ? "Generator running" : "Standby",
+        statusTone: generator?.running ? "active" : "normal",
+      };
+    }
+  }
+  if (node.kind === "service" && node.resourceId) {
+    const delivery = state.servicesByID[node.resourceId];
+    const contract = state.contractsByService[node.resourceId];
+    const deferred = delivery?.deferredKw ?? 0;
+    const atRisk = contract?.status === "at_risk" || contract?.status === "breached";
+    const contractComplete = contract?.status === "met";
+    return {
+      ...node,
+      metric:
+        deferred > 0.001 ? `${deferred} kW deferred` : `${delivery?.deliveredKw ?? 0} kW delivered`,
+      status: atRisk
+        ? "Commitment needs attention"
+        : contractComplete
+          ? "Commitment complete"
+          : deferred > 0.001
+            ? "Demand deferred"
+            : "Within plan",
+      statusTone: atRisk || deferred > 0.001 ? "warning" : "normal",
+    };
+  }
   switch (node.id) {
     case "solar":
       return {
@@ -1035,56 +1028,20 @@ function applyOperatingState(
   }
 }
 
-function applyScenarioMetadata(node: CanvasNode, scenario?: Scenario): CanvasNode {
-  if (!scenario) return node;
-  const assetTypeByNode: Partial<
-    Record<CanvasNode["id"], Scenario["site"]["assets"][number]["type"]>
-  > = {
-    solar: "solar",
-    wind: "wind",
-    battery: "battery",
-    diesel: "diesel",
-  };
-  const serviceModeByNode: Partial<
-    Record<CanvasNode["id"], Scenario["site"]["services"][number]["control_mode"]>
-  > = {
-    clinic: "fixed",
-    water: "shiftable",
-    homes: "curtailable",
-  };
-  const assetType = assetTypeByNode[node.id];
-  if (assetType) {
-    const asset = scenario.site.assets.find((item) => item.type === assetType);
-    return asset ? { ...node, title: asset.name } : node;
-  }
-  const serviceMode = serviceModeByNode[node.id];
-  if (serviceMode) {
-    const service = scenario.site.services.find((item) => item.control_mode === serviceMode);
-    return service ? { ...node, title: service.name, detail: service.description } : node;
-  }
-  if (node.id === "controller") {
-    return { ...node, detail: scenario.site.name };
-  }
-  return node;
-}
-
 function applyCanvasView(node: CanvasNode, view: CanvasView): CanvasNode {
   if (view === "architecture") return node;
 
-  const emphasizedIds =
+  const emphasized =
     view === "forecast"
-      ? new Set(["solar", "wind", "battery", "controller"])
-      : new Set(["diesel", "controller", "clinic", "water", "homes"]);
-
-  return emphasizedIds.has(node.id) ? node : { ...node, dimmed: true };
+      ? node.kind === "asset" || node.kind === "controller"
+      : node.kind === "service" || node.kind === "controller";
+  return emphasized ? node : { ...node, dimmed: true };
 }
 
-function connectionIsEmphasized(fromId: string, toId: string, view: CanvasView) {
+function connectionIsEmphasized(from: CanvasNode, to: CanvasNode, view: CanvasView) {
   if (view === "architecture") return true;
-  if (view === "forecast") {
-    return ["solar", "wind", "battery"].includes(fromId);
-  }
-  return fromId === "diesel" || fromId === "controller" || toId === "controller";
+  if (view === "forecast") return from.kind === "asset" || to.kind === "asset";
+  return from.kind === "service" || to.kind === "service" || from.kind === "controller";
 }
 
 function clamp(value: number, minimum: number, maximum: number) {

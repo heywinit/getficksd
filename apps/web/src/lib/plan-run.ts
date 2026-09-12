@@ -4,6 +4,8 @@ export type ContractStatus = "safe" | "at_risk" | "met" | "breached";
 export const defaultScenarioId = "spiti-valley-default";
 
 export type Scenario = {
+  schema_version: "1";
+  revision: number;
   id: string;
   name: string;
   description: string;
@@ -137,9 +139,116 @@ export type PlanInterval = {
   decision_ids: string[];
 };
 
+export type ComparisonMetric = {
+  baseline: number;
+  candidate: number;
+  delta: number;
+};
+
+export type ComparisonCount = {
+  baseline: number;
+  candidate: number;
+  delta: number;
+};
+
+export type PlanComparison = {
+  baseline_run_id: string;
+  candidate_run_id: string;
+  summary: {
+    contracts_met: ComparisonCount;
+    contracts_breached: ComparisonCount;
+    contract_shortfall: ComparisonMetric;
+    renewable_energy_kwh: ComparisonMetric;
+    diesel_energy_kwh: ComparisonMetric;
+    delivered_energy_kwh: ComparisonMetric;
+    deferred_energy_kwh: ComparisonMetric;
+    unserved_energy_kwh: ComparisonMetric;
+    total_diesel_cost: ComparisonMetric;
+    total_emissions_kg_co2: ComparisonMetric;
+    minimum_battery_energy_kwh: ComparisonMetric;
+  };
+  contracts: Array<{
+    contract_id: string;
+    baseline_present: boolean;
+    candidate_present: boolean;
+    baseline_status?: ContractStatus;
+    candidate_status?: ContractStatus;
+    status_change: string;
+    delivered_energy_kwh: ComparisonMetric;
+    delivered_runtime_minutes: ComparisonCount;
+    shortfall: ComparisonMetric;
+    baseline_first_risk_interval?: number;
+    candidate_first_risk_interval?: number;
+  }>;
+  services: Array<{
+    service_id: string;
+    baseline_present: boolean;
+    candidate_present: boolean;
+    requested_energy_kwh: ComparisonMetric;
+    delivered_energy_kwh: ComparisonMetric;
+    deferred_energy_kwh: ComparisonMetric;
+    unserved_energy_kwh: ComparisonMetric;
+  }>;
+  renewables: Array<{
+    asset_id: string;
+    baseline_present: boolean;
+    candidate_present: boolean;
+    available_energy_kwh: ComparisonMetric;
+    used_energy_kwh: ComparisonMetric;
+    curtailed_energy_kwh: ComparisonMetric;
+  }>;
+  batteries: Array<{
+    asset_id: string;
+    baseline_present: boolean;
+    candidate_present: boolean;
+    charge_energy_kwh: ComparisonMetric;
+    discharge_energy_kwh: ComparisonMetric;
+    minimum_energy_kwh: ComparisonMetric;
+    ending_energy_kwh: ComparisonMetric;
+  }>;
+  generators: Array<{
+    asset_id: string;
+    baseline_present: boolean;
+    candidate_present: boolean;
+    output_energy_kwh: ComparisonMetric;
+    fuel_used_liters: ComparisonMetric;
+    fuel_remaining_liters: ComparisonMetric;
+    diesel_cost: ComparisonMetric;
+    emissions_kg_co2: ComparisonMetric;
+  }>;
+  intervals: Array<{
+    index: number;
+    start: string;
+    end: string;
+    supply_kw: ComparisonMetric;
+    demand_kw: ComparisonMetric;
+    delivered_kw: ComparisonMetric;
+    deferred_kw: ComparisonMetric;
+    unserved_kw: ComparisonMetric;
+    renewable_kw: ComparisonMetric;
+    renewable_used_kw: ComparisonMetric;
+    curtailed_kw: ComparisonMetric;
+    battery_charge_kw: ComparisonMetric;
+    battery_output_kw: ComparisonMetric;
+    battery_ending_energy_kwh: ComparisonMetric;
+    diesel_output_kw: ComparisonMetric;
+    diesel_fuel_used_liters: ComparisonMetric;
+    contract_changes: Array<{
+      contract_id: string;
+      baseline_present: boolean;
+      candidate_present: boolean;
+      baseline_status?: ContractStatus;
+      candidate_status?: ContractStatus;
+      status_change: string;
+    }>;
+  }>;
+};
+
 export type PlanRun = {
   id: string;
   scenario_id: string;
+  scenario_revision: number;
+  parent_run_id?: string;
   planner: "baseline" | "wattson";
   status: "computing" | "complete" | "infeasible" | "failed";
   created_at: string;
@@ -173,6 +282,7 @@ export type PlanRun = {
     total_emissions_kg_co2: number;
     minimum_battery_energy_kwh: number;
   };
+  comparison?: PlanComparison;
 };
 
 export type PlanningRequest = {
