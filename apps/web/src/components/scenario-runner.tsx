@@ -17,6 +17,8 @@ import {
 } from "@getficksd/ui/components/select";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangleIcon,
+  CalendarClockIcon,
   CloudSunIcon,
   LoaderCircleIcon,
   MinusIcon,
@@ -24,6 +26,7 @@ import {
   PlayIcon,
   PlusIcon,
   RotateCcwIcon,
+  ShieldCheckIcon,
   SparklesIcon,
   Trash2Icon,
   WindIcon,
@@ -87,26 +90,60 @@ export function ScenarioRunner({
 
   return (
     <section
-      className="mt-4 overflow-hidden rounded-xl border border-border bg-card"
+      className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card"
       aria-label="Scenario runner"
     >
-      <div className="grid min-h-20 items-center gap-4 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="hidden min-w-fit sm:block">
-            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              Active scenario
-            </p>
-            <p className="mt-0.5 text-xs font-medium">Choose an operating day</p>
+      <header className="flex items-start justify-between gap-3 border-b border-border p-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <CalendarClockIcon className="size-4 text-primary" />
+            <h2 className="text-base font-semibold tracking-tight">Scenario control</h2>
           </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {scenario?.name ?? "Choose an operating day"}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            aria-label="Delete active scenario"
+            title={
+              canDelete
+                ? "Delete active scenario"
+                : "Create another scenario before deleting this one"
+            }
+            onClick={() => setDeleteOpen(true)}
+            disabled={!scenario || !canDelete || isDeleting}
+          >
+            {isDeleting ? <LoaderCircleIcon className="animate-spin" /> : <Trash2Icon />}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDesignerOpen(true)}
+            disabled={!scenario}
+          >
+            <SparklesIcon />
+            Design
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex flex-1 flex-col gap-4 p-4">
+        <div>
+          <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            Operating day
+          </label>
           <Select
             value={selectedScenarioID}
             onValueChange={(value) => value && onSelectScenario(value)}
           >
-            <SelectTrigger
-              className="h-11 min-w-0 flex-1 bg-background"
-              aria-label="Select scenario"
-            >
-              <SelectValue placeholder="Select a scenario" />
+            <SelectTrigger className="h-11 w-full bg-background" aria-label="Select scenario">
+              <SelectValue placeholder="Select a scenario">
+                {scenarios.find((item) => item.id === selectedScenarioID)?.name}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent align="start">
               {scenarios.map((item) => (
@@ -123,79 +160,89 @@ export function ScenarioRunner({
           </Select>
         </div>
 
-        <div className="flex items-center justify-self-center rounded-full border border-border bg-background p-1 shadow-sm">
-          <div className="flex items-center gap-2 px-3 text-xs font-medium">
+        <div className="grid grid-cols-3 gap-2">
+          <ScenarioMetric
+            icon={AlertTriangleIcon}
+            label="Disruptions"
+            value={scenario ? String(scenario.events.length) : "—"}
+          />
+          <ScenarioMetric
+            icon={ShieldCheckIcon}
+            label="Commitments"
+            value={scenario ? String(scenario.contracts.length) : "—"}
+          />
+          <ScenarioMetric
+            icon={CalendarClockIcon}
+            label="Revision"
+            value={scenario ? String(scenario.revision) : "—"}
+          />
+        </div>
+
+        <div className="min-h-16 rounded-lg border border-border bg-background p-2.5">
+          <p className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            Stress events
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {scenario?.events.length ? (
+              scenario.events.slice(0, 3).map((event) => (
+                <span
+                  key={event.id}
+                  className="max-w-full truncate rounded-full border border-border bg-muted/50 px-2 py-1 text-[10px] text-foreground"
+                  title={event.name}
+                >
+                  {event.name}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-muted-foreground">No disruptions configured.</span>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-auto flex items-center justify-between gap-3 rounded-lg border border-border bg-background p-2">
+          <div className="flex items-center gap-2 px-1.5 text-xs font-medium">
             <span
               className={`size-2 rounded-full ${isPlanning || isPlaying ? "bg-primary" : "bg-muted-foreground/40"}`}
             />
-            <span className="min-w-14 text-center">{state}</span>
+            <div>
+              <p>{state}</p>
+              <p className="text-[10px] font-normal text-muted-foreground">
+                {run ? "24-hour plan available" : "No calculated plan"}
+              </p>
+            </div>
           </div>
-          <div className="mr-1 h-5 w-px bg-border" />
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="rounded-full"
-            aria-label={run ? "Play scenario" : "Calculate and play scenario"}
-            disabled={!scenario || isPlanning}
-            onClick={onRun}
-          >
-            {isPlanning ? <LoaderCircleIcon className="animate-spin" /> : <PlayIcon />}
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="rounded-full"
-            aria-label="Pause scenario"
-            disabled={!run || !isPlaying}
-            onClick={onPause}
-          >
-            <PauseIcon />
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="rounded-full"
-            aria-label="Repeat scenario"
-            disabled={!run || isPlanning}
-            onClick={onRepeat}
-          >
-            <RotateCcwIcon />
-          </Button>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 lg:justify-end">
-          <p className="text-right text-[10px] leading-relaxed text-muted-foreground">
-            {scenario
-              ? `${scenario.events.length} disruptions · ${scenario.contracts.length} commitments`
-              : "Loading scenario details"}
-            <br />
-            {scenario ? `Revision ${scenario.revision}` : null}
-          </p>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            aria-label="Delete active scenario"
-            title={
-              canDelete
-                ? "Delete active scenario"
-                : "Create another scenario before deleting this one"
-            }
-            onClick={() => setDeleteOpen(true)}
-            disabled={!scenario || !canDelete || isDeleting}
-          >
-            {isDeleting ? <LoaderCircleIcon className="animate-spin" /> : <Trash2Icon />}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-11 shrink-0"
-            onClick={() => setDesignerOpen(true)}
-            disabled={!scenario}
-          >
-            <SparklesIcon />
-            Design scenario
-          </Button>
+          <div className="flex items-center rounded-full border border-border bg-card p-1">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="rounded-full"
+              aria-label={run ? "Play scenario" : "Calculate and play scenario"}
+              disabled={!scenario || isPlanning}
+              onClick={onRun}
+            >
+              {isPlanning ? <LoaderCircleIcon className="animate-spin" /> : <PlayIcon />}
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="rounded-full"
+              aria-label="Pause scenario"
+              disabled={!run || !isPlaying}
+              onClick={onPause}
+            >
+              <PauseIcon />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="rounded-full"
+              aria-label="Repeat scenario"
+              disabled={!run || isPlanning}
+              onClick={onRepeat}
+            >
+              <RotateCcwIcon />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -232,6 +279,26 @@ export function ScenarioRunner({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+function ScenarioMetric({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof CalendarClockIcon;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-2.5">
+      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-muted-foreground">
+        <Icon className="size-3" />
+        <span className="truncate">{label}</span>
+      </div>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    </div>
   );
 }
 

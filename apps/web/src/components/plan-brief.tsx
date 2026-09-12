@@ -50,7 +50,7 @@ export function PlanBrief({
 
   return (
     <section
-      className="mt-4 rounded-xl border border-border bg-card"
+      className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card"
       aria-labelledby="plan-brief-title"
     >
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
@@ -119,7 +119,7 @@ export function PlanBrief({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 border-t border-border lg:grid-cols-4">
+      <div className="grid grid-cols-2 border-t border-border">
         <BriefMetric
           label="Commitments"
           value={run ? `${run.summary.contracts_met}/${totalContracts}` : `—/${totalContracts}`}
@@ -143,7 +143,7 @@ export function PlanBrief({
       </div>
 
       {decisions.length > 0 ? (
-        <div className="border-t border-border p-4">
+        <div className="flex-1 border-t border-border p-4">
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
               <h3 className="text-xs font-semibold">Decision feed</h3>
@@ -151,16 +151,19 @@ export function PlanBrief({
                 Select a decision to inspect that moment on the grid.
               </p>
             </div>
-            <ActivityIcon className="size-3.5 text-muted-foreground" />
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <ActivityIcon className="size-3.5" />
+              {decisions.length} actions
+            </span>
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {decisions.slice(0, 8).map((decision) => {
+          <div className="grid gap-2 sm:grid-cols-2">
+            {decisions.slice(0, 4).map((decision) => {
               const active = Math.abs(decision.interval_index - currentIndex) <= 1;
               return (
                 <button
                   key={decision.id}
                   type="button"
-                  className={`min-w-56 flex-1 rounded-lg border p-2.5 text-left transition-colors ${
+                  className={`min-w-0 rounded-lg border p-2.5 text-left transition-colors ${
                     active
                       ? "border-primary/40 bg-primary/10"
                       : "border-border bg-background hover:bg-muted/60"
@@ -186,7 +189,7 @@ export function PlanBrief({
 
 function BriefMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="border-r border-border p-3 last:border-r-0 even:border-r-0 lg:even:border-r lg:last:border-r-0">
+    <div className="border-b border-r border-border p-3 even:border-r-0 [&:nth-last-child(-n+2)]:border-b-0">
       <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </p>

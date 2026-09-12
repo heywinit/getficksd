@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { AppHeader } from "@/components/app-header";
 import { OperationsAnalytics } from "@/components/operations-analytics";
 import { PlanBrief } from "@/components/plan-brief";
+import { ReplayNotifications } from "@/components/replay-notifications";
 import { ContractsWorkspace } from "@/components/contracts-workspace";
 import { PlanComparisonPanel } from "@/components/plan-comparison";
 import { GridActions, type GridEditTarget } from "@/components/grid-actions";
@@ -95,7 +96,11 @@ function HomeComponent() {
       ]);
       setReplayToken((current) => current + 1);
       setIsPlaying(true);
+      toast.success("Response plan ready", {
+        description: `${run.summary.contracts_met} commitments protected. The 24-hour replay is starting.`,
+      });
     },
+    onError: (error) => toast.error(error.message),
   });
   const removeMutation = useMutation({
     mutationFn: async (target: CanvasResourceTarget) => {
@@ -265,40 +270,49 @@ function HomeComponent() {
             onEditRequestHandled={() => setEditRequest(null)}
           />
         </section>
-        <PlanBrief
+        <div className="mt-4 grid gap-4 xl:grid-cols-2 xl:items-stretch">
+          <ScenarioRunner
+            scenarios={siteScenarios}
+            scenario={scenarioQuery.data}
+            selectedScenarioID={effectiveScenarioID}
+            run={latestRun}
+            isPlanning={planMutation.isPending}
+            isDeleting={scenarioDeleteMutation.isPending}
+            isPlaying={isPlaying}
+            onSelectScenario={(scenarioID) => {
+              setSelectedScenarioID(scenarioID);
+              setIsPlaying(false);
+              setReplayToken(0);
+              setCurrentHour(0);
+            }}
+            onRun={() => {
+              if (latestRun) setIsPlaying(true);
+              else planMutation.mutate();
+            }}
+            onPause={() => setIsPlaying(false)}
+            onRepeat={() => {
+              setReplayToken((current) => current + 1);
+              setIsPlaying(true);
+            }}
+            onDeleteScenario={(scenarioID) => scenarioDeleteMutation.mutateAsync(scenarioID)}
+          />
+          <PlanBrief
+            scenario={scenarioQuery.data}
+            run={latestRun}
+            currentHour={currentHour}
+            isPlaying={isPlaying}
+            onSelectHour={(hour) => {
+              setCurrentHour(hour);
+              setIsPlaying(false);
+            }}
+          />
+        </div>
+        <ReplayNotifications
           scenario={scenarioQuery.data}
           run={latestRun}
           currentHour={currentHour}
           isPlaying={isPlaying}
-          onSelectHour={(hour) => {
-            setCurrentHour(hour);
-            setIsPlaying(false);
-          }}
-        />
-        <ScenarioRunner
-          scenarios={siteScenarios}
-          scenario={scenarioQuery.data}
-          selectedScenarioID={effectiveScenarioID}
-          run={latestRun}
-          isPlanning={planMutation.isPending}
-          isDeleting={scenarioDeleteMutation.isPending}
-          isPlaying={isPlaying}
-          onSelectScenario={(scenarioID) => {
-            setSelectedScenarioID(scenarioID);
-            setIsPlaying(false);
-            setReplayToken(0);
-            setCurrentHour(0);
-          }}
-          onRun={() => {
-            if (latestRun) setIsPlaying(true);
-            else planMutation.mutate();
-          }}
-          onPause={() => setIsPlaying(false)}
-          onRepeat={() => {
-            setReplayToken((current) => current + 1);
-            setIsPlaying(true);
-          }}
-          onDeleteScenario={(scenarioID) => scenarioDeleteMutation.mutateAsync(scenarioID)}
+          replayToken={replayToken}
         />
         <OperationsAnalytics
           scenario={scenarioQuery.data}
