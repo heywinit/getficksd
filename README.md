@@ -1,79 +1,171 @@
 # Wattson
 
-Wattson uses TanStack Start for the web application and Go for the backend.
+> Resilient energy planning for community microgrids.
 
-The repository contains the clean application foundation and the first version of Wattson's energy domain. The optimizer will be added later.
+Wattson helps grid operators prepare a 24-hour operating plan before weather shifts, demand surges, or fuel deliveries fail. It combines live weather, local grid constraints, and service commitments to decide when to use renewable power, batteries, and diesel generation.
 
-The demo uses four seeded operators. Each operator owns a complete, validated 24-hour community-grid scenario. The selected operator stays in local browser storage.
+The result is an explainable plan that protects critical services such as health centers, water systems, communications, and cold storage. Operators can replay the day, inspect each decision, and compare Wattson's response with a baseline plan.
 
-## Structure
+## The problem
+
+Remote and weak-grid communities often depend on a small mix of solar, wind, batteries, and diesel generation. A forecast error or delayed fuel delivery can force an operator to make high-impact decisions with little time and incomplete information.
+
+Most planning tools show energy totals. They do not connect those totals to service commitments, operational constraints, and real disruption scenarios.
+
+## Our solution
+
+Wattson turns a community grid into an interactive operating model:
+
+- Model generation, storage, demand, and the connections between them.
+- Define critical, essential, and flexible service commitments.
+- Import a seven-day Open-Meteo forecast and translate it into operating actions.
+- Design stress scenarios with renewable shortfalls, demand surges, and delayed fuel deliveries.
+- Calculate a 96-step dispatch plan at 15-minute resolution.
+- Replay energy flow and see operator notifications as conditions change.
+- Compare cost, emissions, fuel use, curtailed energy, and commitment outcomes against a baseline.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Grid model and commitments"] --> D["24-hour scenario"]
+    B["Weather forecast"] --> D
+    C["Stress events"] --> D
+    D --> E["Wattson planner"]
+    E --> F["Verified dispatch plan"]
+    F --> G["Replay and operator actions"]
+    F --> H["Baseline comparison"]
+```
+
+The planner applies active events before it calculates dispatch. It uses a Pyomo and HiGHS mixed-integer model when the optimizer is available. A deterministic Go heuristic remains available as a fallback.
+
+The plan follows physical battery and generator limits. It also accounts for reserve energy, startup fuel, minimum runtime, ramp rates, deadlines, cost, and emissions. The backend verifies power and energy balance before it accepts an optimized result.
+
+## Demo experience
+
+The repository includes complete scenarios for four community grids:
+
+| Site                        | Location                | Example operating risk                   |
+| --------------------------- | ----------------------- | ---------------------------------------- |
+| Spiti Valley Community Grid | Himachal Pradesh, India | Dense cloud and delayed diesel delivery  |
+| Ada Foah Coastal Grid       | Greater Accra, Ghana    | Storm cover and an evening demand surge  |
+| Sierra Verde Health Grid    | Oaxaca, Mexico          | Mountain cloud and road-delayed fuel     |
+| Char Kukri Mukri Grid       | Bhola, Bangladesh       | Monsoon cover and cyclone-shelter demand |
+
+A useful demo flow is:
+
+1. Open a seeded site and review its capacity and commitments.
+2. Open **Forecast** to see live weather and suggested operating actions.
+3. Open **Operate** to inspect the grid topology.
+4. Select or design a disruption scenario.
+5. Calculate the plan and replay the 24-hour response.
+6. Review commitment outcomes, costs, emissions, and the baseline comparison.
+
+## Technology
+
+| Layer                | Main tools                                                              |
+| -------------------- | ----------------------------------------------------------------------- |
+| Web application      | React 19, TanStack Start, TanStack Query, Tailwind CSS, ECharts, Motion |
+| API and domain model | Go 1.24, `net/http`, SQLite, sqlc                                       |
+| Optimization         | Python 3.11+, Pyomo, HiGHS                                              |
+| Deployment           | Cloudflare Workers through Alchemy, Linux systemd for the Go service    |
+| Tooling              | Bun workspaces, Vite+                                                   |
+
+## Repository structure
 
 ```text
 apps/
-├── backend/    # Go HTTP service
-└── web/        # TanStack Start application
+├── backend/              # Go API, scheduler, persistence, and seed data
+│   ├── internal/         # Domain, database, weather, scheduler, and comparison code
+│   ├── optimizer/        # Pyomo and HiGHS optimization service
+│   └── seeddata/         # Four complete community scenarios
+└── web/                  # TanStack Start operator interface
 packages/
-├── config/     # Shared TypeScript configuration
-├── infra/      # Cloudflare deployment
-└── ui/         # Shared React components
+├── config/               # Shared TypeScript configuration
+├── infra/                # Cloudflare deployment definition
+└── ui/                   # Shared React components and theme
+deploy/                   # VPS systemd unit for the backend
 ```
 
-## Local development
+## Run locally
 
-Install the JavaScript dependencies:
+### Prerequisites
+
+- [Bun](https://bun.sh/) 1.3 or newer
+- [Go](https://go.dev/) 1.24 or newer
+- [Python](https://www.python.org/) 3.11 or newer
+- [uv](https://docs.astral.sh/uv/) for the optimization environment
+
+### Installation
+
+1. Install the JavaScript dependencies.
+
+   ```bash
+   bun install
+   ```
+
+2. Create the web environment file.
+
+   ```bash
+   cp apps/web/.env.example apps/web/.env
+   ```
+
+3. Install the optimizer dependencies.
+
+   ```bash
+   cd apps/backend/optimizer
+   uv sync
+   cd ../../..
+   ```
+
+4. Start the web application and API.
+
+   ```bash
+   bun run dev
+   ```
+
+5. Open [http://localhost:3001](http://localhost:3001).
+
+The Go API runs at [http://localhost:8080](http://localhost:8080). SQLite stores data in `local.db`, relative to the backend working directory.
+
+To run without the Python optimizer, disable it before startup:
 
 ```bash
-bun install
+MILP_ENABLED=false bun run dev
 ```
 
-Copy the web environment file:
+## Configuration
 
-```bash
-cp apps/web/.env.example apps/web/.env
-```
+| Variable           | Default                      | Purpose                                 |
+| ------------------ | ---------------------------- | --------------------------------------- |
+| `BACKEND_URL`      | `http://localhost:8080`      | Backend URL used by the TanStack server |
+| `PORT`             | `8080`                       | Go API port                             |
+| `DATABASE_PATH`    | `local.db`                   | SQLite database path                    |
+| `WEB_ORIGINS`      | `http://localhost:3001`      | Comma-separated browser origins         |
+| `MILP_ENABLED`     | `true`                       | Enables the Python optimizer            |
+| `MILP_PYTHON_PATH` | `optimizer/.venv/bin/python` | Python executable for the optimizer     |
+| `MILP_SCRIPT_PATH` | `optimizer/solve.py`         | Optimizer entry point                   |
+| `MILP_TIMEOUT`     | `8s`                         | Maximum time for one optimization run   |
 
-Start both applications:
+## Quality checks
 
-```bash
-bun run dev
-```
-
-The web application uses port `3001`. The Go backend uses port `8080`.
-
-The TanStack server proxies these same-origin routes to Go:
-
-- `/api/backend/health`
-- `/api/backend/events`
-- `/api/backend/demo/operators`
-- `/api/backend/demo/sites/:siteId/scenario`
-
-Set `BACKEND_URL` to the private or public URL of the Go service.
-
-## Scenario data
-
-The seeds live in `apps/backend/seeddata`. They contain each site, its assets, services, contracts, signals, disruptions, and all 96 fifteen-minute values.
-
-Regenerate it after changing its source model:
-
-```bash
-cd apps/backend
-go run ./cmd/generate-seeds
-```
-
-The backend validates every embedded scenario when it starts.
-
-## Checks
+Run the repository checks:
 
 ```bash
 bun run check
 ```
 
-## Deployment
+Run the optimizer tests:
 
-The web application deploys to Cloudflare through Alchemy.
+```bash
+cd apps/backend/optimizer
+uv run pytest
+```
 
-The Go backend deploys to a VPS. See `apps/backend/README.md` and `deploy/wattson-backend.service`.
+The Go test suite covers API behavior, persistence, comparisons, weather caching, scheduling constraints, optimizer integration, and solution verification.
 
-## Template archive
+## API and deployment
 
-Removed template features remain under `.template-archive` during the migration. Remove this archive after the new structure is accepted.
+The API contract is in [`apps/backend/openapi.yaml`](apps/backend/openapi.yaml). Backend details and VPS instructions are in [`apps/backend/README.md`](apps/backend/README.md).
+
+The web application deploys to Cloudflare through Alchemy. The Go API deploys as a standalone binary behind a TLS reverse proxy.
