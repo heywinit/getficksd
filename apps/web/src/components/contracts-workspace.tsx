@@ -28,7 +28,7 @@ import {
   Trash2Icon,
   ZapIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -161,7 +161,13 @@ const progressChartConfig = {
 
 const progressChartOptions = { animationDuration: 350 };
 
-export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run?: PlanRun }) {
+export const ContractsWorkspace = memo(function ContractsWorkspace({
+  scenario,
+  run,
+}: {
+  scenario?: Scenario;
+  run?: PlanRun;
+}) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Contract | "new" | null>(null);
   const outcomes = useMemo(
@@ -309,9 +315,9 @@ export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run
       />
     </section>
   );
-}
+});
 
-function CommitmentProgressChart({
+const CommitmentProgressChart = memo(function CommitmentProgressChart({
   percent,
   priority,
   label,
@@ -343,7 +349,7 @@ function CommitmentProgressChart({
       </div>
     </div>
   );
-}
+});
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (

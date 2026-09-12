@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { ShieldCheckIcon } from "lucide-react";
 
 import {
@@ -16,6 +16,10 @@ type AnalyticsDatum = {
 };
 
 type SeriesKey = Exclude<keyof AnalyticsDatum, "time">;
+
+const POWER_SERIES: SeriesKey[] = ["demandKw", "deliveredKw"];
+const UNSERVED_SERIES: SeriesKey[] = ["unservedKw"];
+const BATTERY_SERIES: SeriesKey[] = ["batteryKwh"];
 
 const analyticsConfig = {
   demandKw: {
@@ -42,7 +46,7 @@ const analyticsConfig = {
   },
 } satisfies ChartConfig;
 
-export function OperationsAnalytics({
+export const OperationsAnalytics = memo(function OperationsAnalytics({
   scenario,
   run,
   currentHour = 0,
@@ -54,10 +58,6 @@ export function OperationsAnalytics({
   const data = useMemo(() => createAnalyticsData(scenario, run), [run, scenario]);
   const currentIndex =
     data.length > 0 ? clamp(Math.floor((currentHour / 24) * data.length), 0, data.length - 1) : 0;
-  const visibleData = useMemo(
-    () => (run ? data.slice(0, currentIndex + 1) : data),
-    [currentIndex, data, run],
-  );
   const metrics = useMemo(
     () => summarizeAnalytics(data, currentIndex, scenario),
     [currentIndex, data, scenario],
@@ -86,8 +86,8 @@ export function OperationsAnalytics({
           title="Power balance"
           metric={formatMetric(metrics.deliveredKw)}
           unit={`of ${formatMetric(metrics.demandKw)} kW served`}
-          data={visibleData}
-          series={["demandKw", "deliveredKw"]}
+          data={data}
+          series={POWER_SERIES}
           axisUnit="kW"
           showAxis
           isLoading={isLoading}
@@ -96,8 +96,8 @@ export function OperationsAnalytics({
           title="Unserved energy"
           metric={formatMetric(metrics.unservedEnergy, 1)}
           unit="kWh so far"
-          data={visibleData}
-          series={["unservedKw"]}
+          data={data}
+          series={UNSERVED_SERIES}
           axisUnit="kW"
           isLoading={isLoading}
           alert={metrics.unservedEnergy > 0}
@@ -107,17 +107,17 @@ export function OperationsAnalytics({
           title="Battery reserve"
           metric={formatMetric(metrics.batteryKwh)}
           unit="kWh now"
-          data={visibleData}
-          series={["batteryKwh"]}
+          data={data}
+          series={BATTERY_SERIES}
           axisUnit="kWh"
           isLoading={isLoading}
         />
       </div>
     </section>
   );
-}
+});
 
-function AnalyticsCard({
+const AnalyticsCard = memo(function AnalyticsCard({
   title,
   metric,
   unit,
@@ -172,37 +172,61 @@ function AnalyticsCard({
             </div>
           </div>
         ) : (
-          <EChartsLineChart
-            className="h-full"
+          <AnalyticsChart
             data={data}
-            config={analyticsConfig}
-            xDataKey="time"
-            curveType="monotoneX"
-            animationType="left-to-right"
-            enableHoverHighlight={series.length > 1}
+            series={series}
+            axisUnit={axisUnit}
+            showAxis={showAxis}
             isLoading={isLoading}
-          >
-            {series.map((dataKey) => (
-              <EChartsLineChart.Line key={dataKey} dataKey={dataKey} strokeWidth={1.5}>
-                <EChartsLineChart.ActiveDot variant="colored-border" />
-              </EChartsLineChart.Line>
-            ))}
-            {showAxis ? (
-              <>
-                <EChartsLineChart.Grid />
-                <EChartsLineChart.YAxis
-                  hideDots
-                  tickFormatter={(value) => `${formatMetric(value)} ${axisUnit}`}
-                />
-              </>
-            ) : null}
-            <EChartsLineChart.Tooltip variant="frosted-glass" roundness="lg" cursor />
-          </EChartsLineChart>
+          />
         )}
       </div>
     </article>
   );
-}
+});
+
+const AnalyticsChart = memo(function AnalyticsChart({
+  data,
+  series,
+  axisUnit,
+  showAxis,
+  isLoading,
+}: {
+  data: AnalyticsDatum[];
+  series: SeriesKey[];
+  axisUnit: string;
+  showAxis: boolean;
+  isLoading: boolean;
+}) {
+  return (
+    <EChartsLineChart
+      className="h-full"
+      data={data}
+      config={analyticsConfig}
+      xDataKey="time"
+      curveType="monotoneX"
+      animationType="left-to-right"
+      enableHoverHighlight={series.length > 1}
+      isLoading={isLoading}
+    >
+      {series.map((dataKey) => (
+        <EChartsLineChart.Line key={dataKey} dataKey={dataKey} strokeWidth={1.5}>
+          <EChartsLineChart.ActiveDot variant="colored-border" />
+        </EChartsLineChart.Line>
+      ))}
+      {showAxis ? (
+        <>
+          <EChartsLineChart.Grid />
+          <EChartsLineChart.YAxis
+            hideDots
+            tickFormatter={(value) => `${formatMetric(value)} ${axisUnit}`}
+          />
+        </>
+      ) : null}
+      <EChartsLineChart.Tooltip variant="frosted-glass" roundness="lg" cursor />
+    </EChartsLineChart>
+  );
+});
 
 function createAnalyticsData(scenario?: Scenario, run?: PlanRun): AnalyticsDatum[] {
   if (!scenario) return [];

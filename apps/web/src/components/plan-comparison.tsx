@@ -8,7 +8,7 @@ import {
   ShieldCheckIcon,
   SunIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import type { PlanComparison, PlanRun, Scenario } from "@/lib/plan-run";
 
@@ -59,7 +59,13 @@ const summaryMetrics = [
   },
 ] as const;
 
-export function PlanComparisonPanel({ scenario, run }: { scenario?: Scenario; run?: PlanRun }) {
+export const PlanComparisonPanel = memo(function PlanComparisonPanel({
+  scenario,
+  run,
+}: {
+  scenario?: Scenario;
+  run?: PlanRun;
+}) {
   const comparison = run?.comparison;
   if (!scenario || !comparison) return null;
 
@@ -178,7 +184,7 @@ export function PlanComparisonPanel({ scenario, run }: { scenario?: Scenario; ru
       </div>
     </section>
   );
-}
+});
 
 function ComparisonList({
   title,

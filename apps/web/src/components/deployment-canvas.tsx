@@ -56,6 +56,7 @@ const WORLD_WIDTH = 1480;
 const WORLD_HEIGHT = 688;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 2;
+const REPLAY_RENDER_FPS = 5;
 
 export type CanvasView = "activity" | "architecture" | "forecast";
 export type CanvasResourceTarget = { kind: "asset" | "service"; id: string };
@@ -386,15 +387,38 @@ export function DeploymentCanvas({
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(false);
-  const [internalCurrentHour, setInternalCurrentHour] = useState(10.5);
-  const currentHour = controlledCurrentHour ?? internalCurrentHour;
-  const setCurrentHour = setControlledCurrentHour ?? setInternalCurrentHour;
+  const initialCurrentHour = controlledCurrentHour ?? 10.5;
+  const [currentHour, setRenderedCurrentHour] = useState(initialCurrentHour);
   const [internalPlaying, setInternalPlaying] = useState(false);
   const isPlaying = playing ?? internalPlaying;
   const setIsPlaying = onPlayingChange ?? setInternalPlaying;
   const canvasSize = useMemo(() => worldSize(nodes), [nodes]);
-  const playbackHourRef = useRef(currentHour);
+  const playbackHourRef = useRef(initialCurrentHour);
+  const lastPublishedHourRef = useRef<number | null>(null);
+  const publishedIntervalRef = useRef(
+    replayIntervalIndex(initialCurrentHour, scenario?.horizon.interval_minutes),
+  );
   const autoPlayedRunRef = useRef<string | null>(null);
+
+  const publishCurrentHour = useCallback(
+    (hour: number) => {
+      if (!setControlledCurrentHour) return;
+      lastPublishedHourRef.current = hour;
+      setControlledCurrentHour(hour);
+    },
+    [setControlledCurrentHour],
+  );
+
+  const setCurrentHour = useCallback(
+    (next: SetStateAction<number>) => {
+      const hour = typeof next === "function" ? next(playbackHourRef.current) : next;
+      playbackHourRef.current = hour;
+      publishedIntervalRef.current = replayIntervalIndex(hour, scenario?.horizon.interval_minutes);
+      setRenderedCurrentHour(hour);
+      publishCurrentHour(hour);
+    },
+    [publishCurrentHour, scenario?.horizon.interval_minutes],
+  );
 
   useEffect(() => {
     const nextNodes = createCanvasNodes(scenario);
@@ -420,8 +444,22 @@ export function DeploymentCanvas({
   }, [replayToken]);
 
   useEffect(() => {
-    playbackHourRef.current = currentHour;
-  }, [currentHour]);
+    if (controlledCurrentHour === undefined) return;
+    if (controlledCurrentHour === lastPublishedHourRef.current) {
+      lastPublishedHourRef.current = null;
+      return;
+    }
+    playbackHourRef.current = controlledCurrentHour;
+    publishedIntervalRef.current = replayIntervalIndex(
+      controlledCurrentHour,
+      scenario?.horizon.interval_minutes,
+    );
+    setRenderedCurrentHour(controlledCurrentHour);
+  }, [controlledCurrentHour, scenario?.horizon.interval_minutes]);
+
+  useEffect(() => {
+    if (!isPlaying) publishCurrentHour(playbackHourRef.current);
+  }, [isPlaying, publishCurrentHour]);
 
   useEffect(() => {
     if (
@@ -512,9 +550,17 @@ export function DeploymentCanvas({
       previousFrame = now;
       playbackHourRef.current = Math.min(24, playbackHourRef.current + elapsed / 6_000);
 
-      if (now - lastRender >= 1000 / 30 || playbackHourRef.current >= 24) {
+      if (now - lastRender >= 1000 / REPLAY_RENDER_FPS || playbackHourRef.current >= 24) {
         lastRender = now;
-        setCurrentHour(playbackHourRef.current);
+        setRenderedCurrentHour(playbackHourRef.current);
+        const intervalIndex = replayIntervalIndex(
+          playbackHourRef.current,
+          scenario?.horizon.interval_minutes,
+        );
+        if (intervalIndex !== publishedIntervalRef.current || playbackHourRef.current >= 24) {
+          publishedIntervalRef.current = intervalIndex;
+          publishCurrentHour(playbackHourRef.current);
+        }
       }
       if (playbackHourRef.current >= 24) {
         setIsPlaying(false);
@@ -525,7 +571,7 @@ export function DeploymentCanvas({
 
     animationFrame = window.requestAnimationFrame(animate);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [isPlaying, run, setCurrentHour, setIsPlaying]);
+  }, [isPlaying, publishCurrentHour, run, scenario?.horizon.interval_minutes, setIsPlaying]);
 
   const operatingState = useMemo(
     () => operatingStateAt(currentHour, scenario, run),
@@ -1669,6 +1715,10 @@ function connectionIsEmphasized(from: CanvasNode, to: CanvasNode, view: CanvasVi
   if (view === "architecture") return true;
   if (view === "forecast") return from.kind === "asset" || to.kind === "asset";
   return from.kind === "service" || to.kind === "service" || from.kind === "controller";
+}
+
+function replayIntervalIndex(hour: number, intervalMinutes = 15) {
+  return Math.floor(hour / (Math.max(1, intervalMinutes) / 60));
 }
 
 function clamp(value: number, minimum: number, maximum: number) {
