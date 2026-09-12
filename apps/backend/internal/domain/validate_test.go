@@ -12,6 +12,25 @@ func TestValidateScenarioAcceptsValidScenario(t *testing.T) {
 	}
 }
 
+func TestValidateScenarioAcceptsCustomCommitmentWindowAndTarget(t *testing.T) {
+	scenario := validScenario()
+	requiredEnergy := 4.2
+	scenario.Contracts[0] = Contract{
+		ID:                "custom-energy-window",
+		Name:              "Custom productive-use promise",
+		ServiceID:         "clinic",
+		Kind:              ContractEnergyDeadline,
+		Priority:          PriorityFlexible,
+		WindowStart:       scenario.Horizon.StartsAt.Add(7*time.Hour + 15*time.Minute),
+		Deadline:          scenario.Horizon.StartsAt.Add(13*time.Hour + 45*time.Minute),
+		RequiredEnergyKWH: &requiredEnergy,
+	}
+
+	if err := ValidateScenario(scenario); err != nil {
+		t.Fatalf("expected custom commitment to be valid, got %v", err)
+	}
+}
+
 func TestValidateScenarioRejectsWrongPlanningGrid(t *testing.T) {
 	scenario := validScenario()
 	scenario.Horizon.IntervalCount = 95
@@ -40,6 +59,16 @@ func TestValidateScenarioRejectsContractWithoutItsTypedTarget(t *testing.T) {
 	assertValidationError(t, scenario, "minimum_power_kw must be positive")
 }
 
+func TestValidateScenarioRejectsEnergyTargetAboveServiceCapacity(t *testing.T) {
+	scenario := validScenario()
+	requiredEnergy := 20.0
+	scenario.Contracts[0].Kind = ContractEnergyDeadline
+	scenario.Contracts[0].MinimumPowerKW = nil
+	scenario.Contracts[0].RequiredEnergyKWH = &requiredEnergy
+
+	assertValidationError(t, scenario, "required energy exceeds service capacity")
+}
+
 func TestValidateScenarioRejectsRenewableOutputAboveCapacity(t *testing.T) {
 	scenario := validScenario()
 	scenario.Signals[0].Values[20] = 51
@@ -52,6 +81,110 @@ func TestValidateScenarioRejectsBatteryStateOutsideBounds(t *testing.T) {
 	scenario.InitialState.Assets[0].StoredEnergyKWH = float64Pointer(101)
 
 	assertValidationError(t, scenario, "exceeds battery capacity")
+}
+
+func TestNormalizeScenarioConnectionsPreservesExplicitDisconnect(t *testing.T) {
+	scenario := validScenario()
+	NormalizeScenarioConnections(&scenario)
+	if got, want := len(scenario.Site.Connections), len(scenario.Site.Assets)+len(scenario.Site.Services); got != want {
+		t.Fatalf("expected %d default connections, got %d", want, got)
+	}
+
+	scenario.Site.Connections = []Connection{}
+	NormalizeScenarioConnections(&scenario)
+	if len(scenario.Site.Connections) != 0 {
+		t.Fatalf("expected an explicit empty graph to stay empty: %#v", scenario.Site.Connections)
+	}
+}
+
+func TestValidateScenarioConnectionRules(t *testing.T) {
+	tests := []struct {
+		name        string
+		connections []Connection
+		expected    string
+	}{
+		{
+			name:        "unknown endpoint",
+			connections: []Connection{{ID: "bad", SourceID: "missing", TargetID: ControllerNodeID}},
+			expected:    "source_id does not reference a node",
+		},
+		{
+			name:        "self edge",
+			connections: []Connection{{ID: "bad", SourceID: "solar", TargetID: "solar"}},
+			expected:    "must not connect a node to itself",
+		},
+		{
+			name: "duplicate pair",
+			connections: []Connection{
+				{ID: "one", SourceID: "solar", TargetID: ControllerNodeID},
+				{ID: "two", SourceID: "solar", TargetID: ControllerNodeID},
+			},
+			expected: "pair must be unique",
+		},
+		{
+			name:        "invalid direction",
+			connections: []Connection{{ID: "bad", SourceID: "clinic", TargetID: ControllerNodeID}},
+			expected:    "direction is not allowed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scenario := validScenario()
+			scenario.Site.Connections = test.connections
+			assertValidationError(t, scenario, test.expected)
+		})
+	}
+}
+
+func TestAssetCanReachControllerThroughBattery(t *testing.T) {
+	scenario := validScenario()
+	scenario.Site.Connections = []Connection{
+		{ID: "solar-battery", SourceID: "solar", TargetID: "battery"},
+		{ID: "battery-controller", SourceID: "battery", TargetID: ControllerNodeID},
+	}
+	if !AssetCanReachController(scenario.Site, "solar") {
+		t.Fatal("expected solar to reach the controller through the battery")
+	}
+}
+
+func TestValidateScenarioRejectsInvalidGeneratorDynamics(t *testing.T) {
+	tests := []struct {
+		name     string
+		change   func(*Asset)
+		expected string
+	}{
+		{
+			name: "negative startup fuel",
+			change: func(asset *Asset) {
+				value := -1.0
+				asset.StartupFuelLiters = &value
+			},
+			expected: "startup_fuel_liters must be nonnegative",
+		},
+		{
+			name: "negative minimum runtime",
+			change: func(asset *Asset) {
+				value := -15
+				asset.MinimumRuntimeMinutes = &value
+			},
+			expected: "minimum_runtime_minutes must be nonnegative",
+		},
+		{
+			name: "zero ramp rate",
+			change: func(asset *Asset) {
+				value := 0.0
+				asset.RampRateKWPerMinute = &value
+			},
+			expected: "ramp_rate_kw_per_minute must be positive",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scenario := validScenario()
+			test.change(&scenario.Site.Assets[2])
+			assertValidationError(t, scenario, test.expected)
+		})
+	}
 }
 
 func assertValidationError(t *testing.T, scenario Scenario, expected string) {

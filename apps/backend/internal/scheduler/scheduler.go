@@ -28,6 +28,7 @@ func New() *Scheduler {
 }
 
 func (s *Scheduler) Plan(ctx context.Context, scenario domain.Scenario, request domain.PlanningRequest) (domain.PlanRun, error) {
+	domain.NormalizeScenarioConnections(&scenario)
 	if err := domain.ValidateScenario(scenario); err != nil {
 		return domain.PlanRun{}, fmt.Errorf("validate scenario: %w", err)
 	}
@@ -88,19 +89,22 @@ func (s *Scheduler) Plan(ctx context.Context, scenario domain.Scenario, request 
 }
 
 type preparedScenario struct {
-	scenario          domain.Scenario
-	assets            map[string]domain.Asset
-	services          map[string]domain.Service
-	renewableSignals  map[string][]float64
-	demandSignals     map[string][]float64
-	fuelSignals       map[string][]float64
-	intervalHours     float64
-	physicalMinimum   map[string]float64
-	policyMinimum     map[string]float64
-	initialEnergy     map[string]float64
-	initialFuel       map[string]float64
-	initialRunning    map[string]bool
-	totalBatteryLimit float64
+	scenario            domain.Scenario
+	assets              map[string]domain.Asset
+	services            map[string]domain.Service
+	renewableSignals    map[string][]float64
+	demandSignals       map[string][]float64
+	fuelSignals         map[string][]float64
+	intervalHours       float64
+	physicalMinimum     map[string]float64
+	policyMinimum       map[string]float64
+	initialEnergy       map[string]float64
+	initialFuel         map[string]float64
+	initialRunning      map[string]bool
+	connectedAssets     map[string]bool
+	chargeableBatteries map[string]bool
+	connectedServices   map[string]bool
+	totalBatteryLimit   float64
 }
 
 func prepareScenario(scenario domain.Scenario, activeEventIDs []string) (*preparedScenario, error) {
@@ -121,27 +125,35 @@ func prepareScenario(scenario domain.Scenario, activeEventIDs []string) (*prepar
 	}
 
 	p := &preparedScenario{
-		scenario:         scenario,
-		assets:           make(map[string]domain.Asset, len(scenario.Site.Assets)),
-		services:         make(map[string]domain.Service, len(scenario.Site.Services)),
-		renewableSignals: make(map[string][]float64),
-		demandSignals:    make(map[string][]float64),
-		fuelSignals:      make(map[string][]float64),
-		intervalHours:    float64(scenario.Horizon.IntervalMinutes) / 60,
-		physicalMinimum:  make(map[string]float64),
-		policyMinimum:    make(map[string]float64),
-		initialEnergy:    make(map[string]float64),
-		initialFuel:      make(map[string]float64),
-		initialRunning:   make(map[string]bool),
+		scenario:            scenario,
+		assets:              make(map[string]domain.Asset, len(scenario.Site.Assets)),
+		services:            make(map[string]domain.Service, len(scenario.Site.Services)),
+		renewableSignals:    make(map[string][]float64),
+		demandSignals:       make(map[string][]float64),
+		fuelSignals:         make(map[string][]float64),
+		intervalHours:       float64(scenario.Horizon.IntervalMinutes) / 60,
+		physicalMinimum:     make(map[string]float64),
+		policyMinimum:       make(map[string]float64),
+		initialEnergy:       make(map[string]float64),
+		initialFuel:         make(map[string]float64),
+		initialRunning:      make(map[string]bool),
+		connectedAssets:     make(map[string]bool),
+		chargeableBatteries: make(map[string]bool),
+		connectedServices:   make(map[string]bool),
 	}
 	for _, asset := range scenario.Site.Assets {
 		p.assets[asset.ID] = asset
+		p.connectedAssets[asset.ID] = domain.AssetCanReachController(scenario.Site, asset.ID)
+		if asset.Type == domain.AssetBattery {
+			p.chargeableBatteries[asset.ID] = p.connectedAssets[asset.ID] || hasConnection(scenario.Site.Connections, domain.ControllerNodeID, asset.ID)
+		}
 		if asset.Type == domain.AssetBattery && asset.CapacityKWH != nil {
 			p.totalBatteryLimit += *asset.CapacityKWH
 		}
 	}
 	for _, service := range scenario.Site.Services {
 		p.services[service.ID] = service
+		p.connectedServices[service.ID] = domain.ServiceIsConnected(scenario.Site, service.ID)
 	}
 	for _, state := range scenario.InitialState.Assets {
 		if state.StoredEnergyKWH != nil {
@@ -186,6 +198,15 @@ func prepareScenario(scenario domain.Scenario, activeEventIDs []string) (*prepar
 	return p, nil
 }
 
+func hasConnection(connections []domain.Connection, sourceID, targetID string) bool {
+	for _, connection := range connections {
+		if connection.SourceID == sourceID && connection.TargetID == targetID {
+			return true
+		}
+	}
+	return false
+}
+
 func applyEvent(p *preparedScenario, event domain.ScenarioEvent) {
 	switch event.Type {
 	case domain.EventRenewableShortfall:
@@ -198,10 +219,17 @@ func applyEvent(p *preparedScenario, event domain.ScenarioEvent) {
 		}
 	case domain.EventDemandSurge:
 		values := signalValuesByID(p, event.SignalID)
+		maximum := math.Inf(1)
+		for _, signal := range p.scenario.Signals {
+			if signal.ID == event.SignalID {
+				maximum = p.services[signal.ServiceID].RatedPowerKW
+				break
+			}
+		}
 		for index := range values {
 			start := intervalStart(p.scenario.Horizon, index)
 			if event.Start != nil && event.End != nil && !start.Before(*event.Start) && start.Before(*event.End) {
-				values[index] *= pointerValue(event.DemandMultiplier)
+				values[index] = math.Min(maximum, values[index]*pointerValue(event.DemandMultiplier))
 			}
 		}
 	case domain.EventFuelDeliveryDelay:
@@ -318,11 +346,14 @@ func bestSupplyIntervals(p *preparedScenario, eligible []int, count int) []int {
 
 func forecastSurplus(p *preparedScenario, index int) float64 {
 	total := 0.0
-	for _, values := range p.renewableSignals {
+	for assetID, values := range p.renewableSignals {
+		if !p.connectedAssets[assetID] {
+			continue
+		}
 		total += values[index]
 	}
 	for _, service := range p.scenario.Site.Services {
-		if service.ControlMode == domain.ControlFixed {
+		if service.ControlMode == domain.ControlFixed && p.connectedServices[service.ID] {
 			total -= p.demandSignals[service.ID][index] / (1 - p.scenario.OperatingPolicy.AssumedLossPercent)
 		}
 	}

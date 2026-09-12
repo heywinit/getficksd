@@ -17,7 +17,7 @@ func TestSeedScenarioMeetsEveryContractDuringActiveEvents(t *testing.T) {
 	run, err := planner.Plan(context.Background(), scenario, domain.PlanningRequest{
 		ScenarioID:     scenario.ID,
 		Planner:        domain.PlannerWattson,
-		ActiveEventIDs: []string{"midday-solar-shortfall", "evening-fuel-delay"},
+		ActiveEventIDs: []string{"midday-cloud-cover", "evening-household-surge", "evening-fuel-delay"},
 	})
 	if err != nil {
 		t.Fatalf("plan scenario: %v", err)
@@ -38,15 +38,15 @@ func TestSeedScenarioMeetsEveryContractDuringActiveEvents(t *testing.T) {
 		}
 	}
 
-	clinic := outcomeByID(t, run, "clinic-always-on")
-	if clinic.DeliveredRuntimeMinutes != 24*60 {
-		t.Fatalf("expected full-day clinic runtime, got %d minutes", clinic.DeliveredRuntimeMinutes)
+	healthCenter := outcomeByID(t, run, "health-center-continuity")
+	if healthCenter.DeliveredRuntimeMinutes != 24*60 {
+		t.Fatalf("expected full-day health center runtime, got %d minutes", healthCenter.DeliveredRuntimeMinutes)
 	}
-	water := outcomeByID(t, run, "water-before-morning")
-	if water.DeliveredRuntimeMinutes < 120 {
-		t.Fatalf("expected at least 120 water-pump minutes, got %d", water.DeliveredRuntimeMinutes)
+	water := outcomeByID(t, run, "water-storage-daily")
+	if water.DeliveredRuntimeMinutes < 240 {
+		t.Fatalf("expected at least 240 water-pump minutes, got %d", water.DeliveredRuntimeMinutes)
 	}
-	if run.Summary.MinimumBatteryEnergyKWH < 36-epsilon {
+	if run.Summary.MinimumBatteryEnergyKWH < 90-epsilon {
 		t.Fatalf("battery crossed its physical minimum: %.3f kWh", run.Summary.MinimumBatteryEnergyKWH)
 	}
 	if len(run.Decisions) == 0 {
@@ -54,39 +54,102 @@ func TestSeedScenarioMeetsEveryContractDuringActiveEvents(t *testing.T) {
 	}
 
 	forecast := signalByID(t, scenario, "spiti-solar-forecast")
-	if run.Intervals[20].Renewables[0].AvailableKW >= forecast.Values[20] {
+	if run.Intervals[44].Renewables[0].AvailableKW >= forecast.Values[44] {
 		t.Fatal("active solar-shortfall event did not reduce renewable availability")
 	}
 }
 
 func TestActiveEventsTransformTheirSignals(t *testing.T) {
 	scenario := loadSeedScenario(t)
-	prepared, err := prepareScenario(scenario, []string{"midday-solar-shortfall", "evening-fuel-delay"})
+	prepared, err := prepareScenario(scenario, []string{"midday-cloud-cover", "evening-fuel-delay"})
 	if err != nil {
 		t.Fatalf("prepare active events: %v", err)
 	}
 	solar := signalByID(t, scenario, "spiti-solar-forecast")
-	if difference := prepared.renewableSignals["spiti-solar"][20] - solar.Values[20]*0.45; math.Abs(difference) > epsilon {
+	if difference := prepared.renewableSignals["spiti-solar"][44] - solar.Values[44]*0.35; math.Abs(difference) > epsilon {
 		t.Fatalf("solar event multiplier was not applied: difference %.6f", difference)
 	}
-	if prepared.fuelSignals["spiti-diesel"][48] != 0 || prepared.fuelSignals["spiti-diesel"][68] != 80 {
-		t.Fatalf("fuel delivery was not moved to the delayed interval: %#v", prepared.fuelSignals["spiti-diesel"][48:69])
+	if prepared.fuelSignals["spiti-diesel"][72] != 0 || prepared.fuelSignals["spiti-diesel"][88] != 220 {
+		t.Fatalf("fuel delivery was not moved to the delayed interval: %#v", prepared.fuelSignals["spiti-diesel"][72:89])
 	}
 
 	multiplier := 1.5
 	start := scenario.Horizon.StartsAt
 	end := start.Add(15 * time.Minute)
 	scenario.Events = append(scenario.Events, domain.ScenarioEvent{
-		ID: "demand-surge", Name: "Demand surge", Type: domain.EventDemandSurge, SignalID: "homes-demand",
+		ID: "test-demand-surge", Name: "Demand surge", Type: domain.EventDemandSurge, SignalID: "household-demand",
 		Start: &start, End: &end, DemandMultiplier: &multiplier,
 	})
-	prepared, err = prepareScenario(scenario, []string{"demand-surge"})
+	prepared, err = prepareScenario(scenario, []string{"test-demand-surge"})
 	if err != nil {
 		t.Fatalf("prepare demand event: %v", err)
 	}
-	homes := signalByID(t, scenario, "homes-demand")
-	if difference := prepared.demandSignals["flexible-homes"][0] - homes.Values[0]*multiplier; math.Abs(difference) > epsilon {
+	homes := signalByID(t, scenario, "household-demand")
+	if difference := prepared.demandSignals["households"][0] - homes.Values[0]*multiplier; math.Abs(difference) > epsilon {
 		t.Fatalf("demand multiplier was not applied: difference %.6f", difference)
+	}
+}
+
+func TestDisconnectedTopologyDoesNotDispatchOrServeLoad(t *testing.T) {
+	scenario := loadSeedScenario(t)
+	scenario.Site.Connections = []domain.Connection{}
+	run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+		ScenarioID: scenario.ID,
+		Planner:    domain.PlannerWattson,
+	})
+	if err != nil {
+		t.Fatalf("plan disconnected scenario: %v", err)
+	}
+	for _, interval := range run.Intervals {
+		for _, renewable := range interval.Renewables {
+			if renewable.UsedKW > epsilon {
+				t.Fatalf("disconnected renewable %q dispatched %.3f kW", renewable.AssetID, renewable.UsedKW)
+			}
+		}
+		for _, battery := range interval.Batteries {
+			if battery.ChargeKW > epsilon || battery.DischargeKW > epsilon {
+				t.Fatalf("disconnected battery %q dispatched: %#v", battery.AssetID, battery)
+			}
+		}
+		for _, generator := range interval.Generators {
+			if generator.OutputKW > epsilon {
+				t.Fatalf("disconnected generator %q dispatched %.3f kW", generator.AssetID, generator.OutputKW)
+			}
+		}
+		for _, service := range interval.Services {
+			if service.DeliveredKW > epsilon {
+				t.Fatalf("disconnected service %q received %.3f kW", service.ServiceID, service.DeliveredKW)
+			}
+		}
+	}
+}
+
+func TestRenewableCanDispatchThroughBatteryPath(t *testing.T) {
+	scenario := scarceSupplyScenario(2)
+	scenario.Site.Assets = append(scenario.Site.Assets, domain.Asset{
+		ID: "battery", Name: "Battery", Type: domain.AssetBattery,
+		CapacityKWH: floatPointer(10), MinimumStoredEnergyKWH: floatPointer(0),
+		MaxChargeKW: floatPointer(2), MaxDischargeKW: floatPointer(2),
+		ChargeEfficiency: floatPointer(1), DischargeEfficiency: floatPointer(1),
+	})
+	scenario.InitialState.Assets = append(scenario.InitialState.Assets, domain.AssetState{
+		AssetID: "battery", Type: domain.AssetBattery, StoredEnergyKWH: floatPointer(0),
+	})
+	scenario.Site.Connections = []domain.Connection{
+		{ID: "solar-battery", SourceID: "solar", TargetID: "battery"},
+		{ID: "battery-controller", SourceID: "battery", TargetID: domain.ControllerNodeID},
+		{ID: "controller-critical", SourceID: domain.ControllerNodeID, TargetID: "critical"},
+		{ID: "controller-flexible", SourceID: domain.ControllerNodeID, TargetID: "flexible"},
+	}
+	run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+		ScenarioID: scenario.ID,
+		Planner:    domain.PlannerWattson,
+	})
+	if err != nil {
+		t.Fatalf("plan battery-path scenario: %v", err)
+	}
+	if run.Intervals[0].Renewables[0].UsedKW <= epsilon {
+		t.Fatal("expected solar to dispatch through the battery path")
 	}
 }
 
@@ -177,6 +240,150 @@ func TestGeneratorProtectsAContractWhenRenewablesAreUnavailable(t *testing.T) {
 	if run.Intervals[len(run.Intervals)-1].Generators[0].FuelRemainingLiters < 4-epsilon {
 		t.Fatalf("unexpected fuel use: %#v", run.Intervals[len(run.Intervals)-1].Generators[0])
 	}
+}
+
+func TestGeneratorServesCurtailableDemandAfterBatteryReserve(t *testing.T) {
+	scenario := generatorScenario()
+	scenario.Site.Services = append(scenario.Site.Services, domain.Service{
+		ID: "homes", Name: "Homes", Description: "Curtailable household demand",
+		ControlMode: domain.ControlCurtailable, RatedPowerKW: 0.8,
+	})
+	scenario.Signals = append(scenario.Signals, domain.Signal{
+		ID: "homes-demand", Kind: domain.SignalServiceDemand, ServiceID: "homes", Unit: "kW",
+		Values: constant(96, 0.8),
+	})
+
+	run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+		ScenarioID: scenario.ID,
+		Planner:    domain.PlannerWattson,
+	})
+	if err != nil {
+		t.Fatalf("plan scenario: %v", err)
+	}
+	first := run.Intervals[0]
+	if delivered := deliveryByID(t, first, "homes").DeliveredKW; delivered < 0.8-epsilon {
+		t.Fatalf("diesel did not serve curtailable demand: delivered %.3f kW", delivered)
+	}
+	if output := first.Generators[0].OutputKW; output < 1.8-epsilon {
+		t.Fatalf("expected the generator to cover total demand, got %.3f kW", output)
+	}
+}
+
+func TestGeneratorHonorsStartupFuelAndMinimumRuntime(t *testing.T) {
+	scenario := generatorScenario()
+	minimumOutput := 1.0
+	startupFuel := 0.2
+	minimumRuntime := 45
+	rampRate := 10.0
+	scenario.Site.Assets[0].MinimumOutputKW = &minimumOutput
+	scenario.Site.Assets[0].StartupFuelLiters = &startupFuel
+	scenario.Site.Assets[0].MinimumRuntimeMinutes = &minimumRuntime
+	scenario.Site.Assets[0].RampRateKWPerMinute = &rampRate
+	scenario.Site.Services[0].ControlMode = domain.ControlShiftable
+	scenario.Signals[0].Values = constant(96, 1)
+	requiredRuntime := 15
+	scenario.Contracts[0] = domain.Contract{
+		ID: "one-interval", Name: "One interval", ServiceID: "critical",
+		Kind: domain.ContractRuntimeDeadline, Priority: domain.PriorityCritical,
+		WindowStart:            scenario.Horizon.StartsAt,
+		Deadline:               scenario.Horizon.StartsAt.Add(15 * time.Minute),
+		RequiredRuntimeMinutes: &requiredRuntime,
+	}
+
+	run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+		ScenarioID: scenario.ID,
+		Planner:    domain.PlannerWattson,
+	})
+	if err != nil {
+		t.Fatalf("plan scenario: %v", err)
+	}
+	for index := 0; index < 3; index++ {
+		if !run.Intervals[index].Generators[0].Running {
+			t.Fatalf("generator stopped before its 45-minute minimum runtime at interval %d", index)
+		}
+	}
+	if run.Intervals[3].Generators[0].Running {
+		t.Fatal("generator continued after its minimum runtime without demand")
+	}
+	first := run.Intervals[0].Generators[0]
+	if !first.Started || math.Abs(first.StartupFuelLiters-startupFuel) > epsilon {
+		t.Fatalf("startup fuel was not recorded: %#v", first)
+	}
+	if run.Intervals[1].DumpedPowerKW < minimumOutput-epsilon {
+		t.Fatalf("minimum stable output was not recorded as dumped power: %#v", run.Intervals[1])
+	}
+}
+
+func TestSeedScenarioPreservesPhysicalBalances(t *testing.T) {
+	scenario := loadSeedScenario(t)
+	events := []string{"midday-cloud-cover", "evening-household-surge", "evening-fuel-delay"}
+	prepared, err := prepareScenario(scenario, events)
+	if err != nil {
+		t.Fatalf("prepare scenario: %v", err)
+	}
+	run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+		ScenarioID: scenario.ID, Planner: domain.PlannerWattson, ActiveEventIDs: events,
+	})
+	if err != nil {
+		t.Fatalf("plan scenario: %v", err)
+	}
+
+	previousFuel := cloneFloatMap(prepared.initialFuel)
+	previousOutput := make(map[string]float64)
+	for _, interval := range run.Intervals {
+		supply := 0.0
+		use := interval.LossesKW + interval.DumpedPowerKW
+		for _, renewable := range interval.Renewables {
+			supply += renewable.UsedKW
+		}
+		for _, service := range interval.Services {
+			use += service.DeliveredKW
+		}
+		for _, battery := range interval.Batteries {
+			asset := prepared.assets[battery.AssetID]
+			supply += battery.DischargeKW
+			use += battery.ChargeKW
+			expectedEnd := battery.StartingEnergyKWH + battery.ChargeKW*pointerValue(asset.ChargeEfficiency)*prepared.intervalHours - battery.DischargeKW/preparedAssetEfficiency(asset)*prepared.intervalHours
+			if math.Abs(expectedEnd-battery.EndingEnergyKWH) > 0.00001 {
+				t.Fatalf("battery energy does not balance at interval %d: expected %.6f, got %.6f", interval.Index, expectedEnd, battery.EndingEnergyKWH)
+			}
+			if battery.ChargeKW > pointerValue(asset.MaxChargeKW)+epsilon || battery.DischargeKW > pointerValue(asset.MaxDischargeKW)+epsilon {
+				t.Fatalf("battery power limit exceeded at interval %d: %#v", interval.Index, battery)
+			}
+			if battery.EndingEnergyKWH < pointerValue(asset.MinimumStoredEnergyKWH)-epsilon || battery.EndingEnergyKWH > pointerValue(asset.CapacityKWH)+epsilon {
+				t.Fatalf("battery energy boundary exceeded at interval %d: %#v", interval.Index, battery)
+			}
+			if battery.ChargeKW > epsilon && battery.DischargeKW > epsilon {
+				t.Fatalf("battery charged and discharged together at interval %d", interval.Index)
+			}
+		}
+		for _, generator := range interval.Generators {
+			asset := prepared.assets[generator.AssetID]
+			supply += generator.OutputKW
+			if generator.Running && (generator.OutputKW < pointerValue(asset.MinimumOutputKW)-epsilon || generator.OutputKW > pointerValue(asset.MaximumOutputKW)+epsilon) {
+				t.Fatalf("generator output boundary exceeded at interval %d: %#v", interval.Index, generator)
+			}
+			if generator.Running && asset.RampRateKWPerMinute != nil {
+				maximumChange := *asset.RampRateKWPerMinute * float64(scenario.Horizon.IntervalMinutes)
+				if math.Abs(generator.OutputKW-previousOutput[generator.AssetID]) > maximumChange+epsilon {
+					t.Fatalf("generator ramp limit exceeded at interval %d: previous %.6f, current %.6f", interval.Index, previousOutput[generator.AssetID], generator.OutputKW)
+				}
+			}
+			expectedFuel := previousFuel[generator.AssetID] + prepared.fuelSignals[generator.AssetID][interval.Index] - generator.FuelUsedLiters
+			if math.Abs(expectedFuel-generator.FuelRemainingLiters) > 0.00001 {
+				t.Fatalf("generator fuel does not balance at interval %d: expected %.6f, got %.6f", interval.Index, expectedFuel, generator.FuelRemainingLiters)
+			}
+			previousFuel[generator.AssetID] = generator.FuelRemainingLiters
+			previousOutput[generator.AssetID] = generator.OutputKW
+		}
+		if math.Abs(supply-use) > 0.00001 {
+			t.Fatalf("AC power does not balance at interval %d: supply %.6f kW, use %.6f kW", interval.Index, supply, use)
+		}
+	}
+}
+
+func preparedAssetEfficiency(asset domain.Asset) float64 {
+	return pointerValue(asset.DischargeEfficiency)
 }
 
 func deterministicScheduler() *Scheduler {
@@ -311,6 +518,10 @@ func constant(count int, value float64) []float64 {
 		values[index] = value
 	}
 	return values
+}
+
+func floatPointer(value float64) *float64 {
+	return &value
 }
 
 func outcomeByID(t *testing.T, run domain.PlanRun, id string) domain.ContractOutcome {

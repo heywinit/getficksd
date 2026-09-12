@@ -8,7 +8,10 @@ The scheduler uses 15-minute intervals. It applies active scenario events before
 - schedules runtime and energy commitments in the best forecast intervals before each deadline;
 - uses renewable power, battery energy above the operating reserve, and diesel in that order;
 - permits emergency battery use down to the physical minimum only for committed service;
-- records deferrals, generator starts, contract state, costs, emissions, and final shortfalls.
+- uses diesel for remaining community demand instead of treating all uncontracted demand as disposable;
+- enforces generator startup fuel, minimum runtime, ramp rate, stable output, and available fuel;
+- records deferrals, generator starts, dumped power, contract state, costs, emissions, and final shortfalls;
+- preserves AC power balance and battery energy balance in every interval.
 
 ## Local development
 
@@ -23,9 +26,11 @@ Available endpoints:
 - `GET /health`
 - `GET /v1/demo/operators`
 - `GET /v1/demo/sites/{siteID}/scenario`
+- `GET /v1/scenarios`
 - `POST /v1/scenarios`
 - `GET /v1/scenarios/{scenarioID}`
 - `PUT /v1/scenarios/{scenarioID}`
+- `DELETE /v1/scenarios/{scenarioID}`
 - `PUT /v1/scenarios/{scenarioID}/signals/{signalID}`
 - `PUT /v1/scenarios/{scenarioID}/initial-state`
 - `POST /v1/scenarios/{scenarioID}/events`
@@ -36,9 +41,9 @@ Available endpoints:
 - `GET /v1/scenarios/{scenarioID}/plan-runs`
 - `GET /v1/events`
 
-A Wattson run can reference a baseline through `parent_run_id`. Its response includes measured summary, contract, service, asset, and interval differences. Both runs must use the same persisted scenario revision, so an edit cannot silently invalidate the comparison.
+A Wattson run can reference a baseline through `parent_run_id`. Its response includes measured summary, contract, service, asset, and interval differences. Each run stores its scenario revision and a canonical SHA-256 scenario snapshot hash. A comparison requires both to match, so an edit cannot silently invalidate the result.
 
-The canonical domain types are in `internal/domain`. The checked-in Spiti Valley scenario matches the current frontend data. The backend inserts it only when it is absent. It does not overwrite user edits at startup.
+The canonical domain types are in `internal/domain`. The checked-in Spiti Valley scenario models eight community services, seven commitments, three disruptions, and four physical assets. The backend inserts it only when it is absent. It does not overwrite user edits at startup.
 
 Scenario writes validate the complete scenario before the backend saves it. `POST /v1/scenarios` returns `409` for a duplicate ID. `PUT /v1/scenarios/{scenarioID}` replaces the full document, and its body ID must match the path. The signal, initial-state, and event routes return the full updated scenario.
 

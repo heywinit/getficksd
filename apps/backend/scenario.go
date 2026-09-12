@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/heywinit/wattson/backend/internal/database"
@@ -41,6 +42,7 @@ func mustLoadDemoScenarios() map[string]domain.Scenario {
 		if scenario.Revision < 1 {
 			scenario.Revision = 1
 		}
+		domain.NormalizeScenarioConnections(&scenario)
 		if err := domain.ValidateScenario(scenario); err != nil {
 			panic(fmt.Errorf("validate embedded scenario %q: %w", file.Name(), err))
 		}
@@ -83,6 +85,44 @@ func (a *app) getScenario(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, scenario)
 }
 
+type scenarioSummary struct {
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	SiteName      string                 `json:"site_name"`
+	Location      string                 `json:"location"`
+	Revision      int                    `json:"revision"`
+	Horizon       domain.PlanningHorizon `json:"horizon"`
+	ContractCount int                    `json:"contract_count"`
+	EventCount    int                    `json:"event_count"`
+}
+
+func (a *app) listScenarios(response http.ResponseWriter, request *http.Request) {
+	limit, err := queryInteger(request, "limit", 50, 1, 100)
+	if err != nil {
+		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	offset, err := queryInteger(request, "offset", 0, 0, 1_000_000)
+	if err != nil {
+		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	scenarios, err := a.store.Scenarios(request.Context(), int64(limit), int64(offset))
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenarios could not be loaded."})
+		return
+	}
+	summaries := make([]scenarioSummary, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		summaries = append(summaries, scenarioSummary{
+			ID: scenario.ID, Name: scenario.Name, SiteName: scenario.Site.Name,
+			Location: scenario.Site.Location, Revision: scenario.Revision, Horizon: scenario.Horizon,
+			ContractCount: len(scenario.Contracts), EventCount: len(scenario.Events),
+		})
+	}
+	writeJSON(response, http.StatusOK, summaries)
+}
+
 func (a *app) createScenario(response http.ResponseWriter, request *http.Request) {
 	var scenario domain.Scenario
 	if err := decodeJSON(response, request, &scenario); err != nil {
@@ -90,6 +130,8 @@ func (a *app) createScenario(response http.ResponseWriter, request *http.Request
 		return
 	}
 	scenario.Revision = 1
+	normalizeScenarioOperatingPolicy(&scenario)
+	domain.NormalizeScenarioConnections(&scenario)
 	if err := domain.ValidateScenario(scenario); err != nil {
 		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
@@ -120,7 +162,10 @@ func (a *app) replaceScenario(response http.ResponseWriter, request *http.Reques
 	if !ok {
 		return
 	}
+	removeConnectionsForDeletedNodes(existing.Site, &scenario.Site)
 	scenario.Revision = existing.Revision + 1
+	normalizeScenarioOperatingPolicy(&scenario)
+	domain.NormalizeScenarioConnections(&scenario)
 	if err := domain.ValidateScenario(scenario); err != nil {
 		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
@@ -130,6 +175,48 @@ func (a *app) replaceScenario(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusOK, scenario)
+}
+
+func removeConnectionsForDeletedNodes(existing domain.Site, replacement *domain.Site) {
+	existingNodes := make(map[string]struct{}, len(existing.Assets)+len(existing.Services))
+	replacementNodes := make(map[string]struct{}, len(replacement.Assets)+len(replacement.Services))
+	for _, asset := range existing.Assets {
+		existingNodes[asset.ID] = struct{}{}
+	}
+	for _, service := range existing.Services {
+		existingNodes[service.ID] = struct{}{}
+	}
+	for _, asset := range replacement.Assets {
+		replacementNodes[asset.ID] = struct{}{}
+	}
+	for _, service := range replacement.Services {
+		replacementNodes[service.ID] = struct{}{}
+	}
+	connections := replacement.Connections[:0]
+	for _, connection := range replacement.Connections {
+		_, sourceExisted := existingNodes[connection.SourceID]
+		_, sourceRemains := replacementNodes[connection.SourceID]
+		_, targetExisted := existingNodes[connection.TargetID]
+		_, targetRemains := replacementNodes[connection.TargetID]
+		if (sourceExisted && !sourceRemains) || (targetExisted && !targetRemains) {
+			continue
+		}
+		connections = append(connections, connection)
+	}
+	replacement.Connections = connections
+}
+
+func (a *app) deleteScenario(response http.ResponseWriter, request *http.Request) {
+	err := a.store.DeleteScenario(request.Context(), request.PathValue("scenarioID"))
+	if errors.Is(err, database.ErrNotFound) {
+		writeJSON(response, http.StatusNotFound, map[string]string{"message": "The scenario does not exist."})
+		return
+	}
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenario could not be deleted."})
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 type signalValuesRequest struct {
@@ -172,6 +259,28 @@ func (a *app) replaceInitialState(response http.ResponseWriter, request *http.Re
 		return
 	}
 	scenario.InitialState = initialState
+	a.saveScenarioUpdate(response, request, scenario, http.StatusOK)
+}
+
+type connectionsRequest struct {
+	Connections []domain.Connection `json:"connections"`
+}
+
+func (a *app) replaceConnections(response http.ResponseWriter, request *http.Request) {
+	var connectionsRequest connectionsRequest
+	if err := decodeJSON(response, request, &connectionsRequest); err != nil {
+		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	if connectionsRequest.Connections == nil {
+		writeJSON(response, http.StatusBadRequest, map[string]string{"message": "connections is required"})
+		return
+	}
+	scenario, ok := a.loadScenarioForUpdate(response, request)
+	if !ok {
+		return
+	}
+	scenario.Site.Connections = connectionsRequest.Connections
 	a.saveScenarioUpdate(response, request, scenario, http.StatusOK)
 }
 
@@ -236,6 +345,8 @@ func (a *app) loadScenarioForUpdate(response http.ResponseWriter, request *http.
 
 func (a *app) saveScenarioUpdate(response http.ResponseWriter, request *http.Request, scenario domain.Scenario, status int) {
 	scenario.Revision++
+	normalizeScenarioOperatingPolicy(&scenario)
+	domain.NormalizeScenarioConnections(&scenario)
 	if err := domain.ValidateScenario(scenario); err != nil {
 		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
@@ -245,6 +356,30 @@ func (a *app) saveScenarioUpdate(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, status, scenario)
+}
+
+func normalizeScenarioOperatingPolicy(scenario *domain.Scenario) {
+	minimum := 0.0
+	capacity := 0.0
+	for _, asset := range scenario.Site.Assets {
+		if asset.Type != domain.AssetBattery {
+			continue
+		}
+		if asset.MinimumStoredEnergyKWH != nil {
+			minimum += *asset.MinimumStoredEnergyKWH
+		}
+		if asset.CapacityKWH != nil {
+			capacity += *asset.CapacityKWH
+		}
+	}
+	if capacity == 0 {
+		scenario.OperatingPolicy.ReserveEnergyKWH = 0
+		return
+	}
+	scenario.OperatingPolicy.ReserveEnergyKWH = math.Max(
+		minimum,
+		math.Min(scenario.OperatingPolicy.ReserveEnergyKWH, capacity),
+	)
 }
 
 func writeScenarioReplaceError(response http.ResponseWriter, err error) {
@@ -257,6 +392,13 @@ func writeScenarioReplaceError(response http.ResponseWriter, err error) {
 
 func seedDemoScenarios(ctx context.Context, store *database.Store) error {
 	for _, scenario := range demoScenarios {
+		deleted, err := store.ScenarioWasDeleted(ctx, scenario.ID)
+		if err != nil {
+			return err
+		}
+		if deleted {
+			continue
+		}
 		if err := store.CreateScenario(ctx, scenario); err != nil && !errors.Is(err, database.ErrConflict) {
 			return err
 		}

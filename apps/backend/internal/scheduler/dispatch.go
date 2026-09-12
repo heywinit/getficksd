@@ -10,17 +10,27 @@ import (
 )
 
 type dispatchState struct {
-	batteryEnergy map[string]float64
-	fuel          map[string]float64
-	running       map[string]bool
+	batteryEnergy       map[string]float64
+	fuel                map[string]float64
+	running             map[string]bool
+	generatorOutput     map[string]float64
+	minimumRunIntervals map[string]int
 }
 
 func newDispatchState(p *preparedScenario) *dispatchState {
-	return &dispatchState{
-		batteryEnergy: cloneFloatMap(p.initialEnergy),
-		fuel:          cloneFloatMap(p.initialFuel),
-		running:       cloneBoolMap(p.initialRunning),
+	state := &dispatchState{
+		batteryEnergy:       cloneFloatMap(p.initialEnergy),
+		fuel:                cloneFloatMap(p.initialFuel),
+		running:             cloneBoolMap(p.initialRunning),
+		generatorOutput:     make(map[string]float64),
+		minimumRunIntervals: make(map[string]int),
 	}
+	for _, asset := range p.scenario.Site.Assets {
+		if asset.Type == domain.AssetDiesel && state.running[asset.ID] {
+			state.generatorOutput[asset.ID] = pointerValue(asset.MinimumOutputKW)
+		}
+	}
+	return state
 }
 
 type decisionState struct {
@@ -65,7 +75,9 @@ func dispatchInterval(
 			continue
 		}
 		available := p.renewableSignals[asset.ID][index]
-		renewableAvailable += available
+		if p.connectedAssets[asset.ID] {
+			renewableAvailable += available
+		}
 		interval.Renewables = append(interval.Renewables, domain.RenewableDispatch{
 			AssetID:     asset.ID,
 			AvailableKW: round6(available),
@@ -77,13 +89,16 @@ func dispatchInterval(
 	normalGrossCapacity := renewableAvailable + sumValues(normalBattery) + sumValues(generatorCapacity)
 	totalGrossCapacity := normalGrossCapacity + sumValues(emergencyBattery)
 	lossFactor := 1 - p.scenario.OperatingPolicy.AssumedLossPercent
-	discretionaryServiceCapacity := (renewableAvailable + sumValues(normalBattery)) * lossFactor
+	discretionaryServiceCapacity := normalGrossCapacity * lossFactor
 	totalServiceCapacity := totalGrossCapacity * lossFactor
 
 	delivered := make(map[string]float64, len(p.services))
 	remainingRequiredCapacity := totalServiceCapacity
 	requiredServices := orderedServices(p, plan, index, true)
 	for _, service := range requiredServices {
+		if !p.connectedServices[service.ID] {
+			continue
+		}
 		required := plan.required[service.ID][index]
 		amount := math.Min(required, remainingRequiredCapacity)
 		delivered[service.ID] += amount
@@ -93,6 +108,9 @@ func dispatchInterval(
 	requiredDelivered := sumValues(delivered)
 	remainingNormalCapacity := math.Max(0, discretionaryServiceCapacity-requiredDelivered)
 	for _, service := range orderedServices(p, plan, index, false) {
+		if !p.connectedServices[service.ID] {
+			continue
+		}
 		remaining := math.Max(0, plan.requested[service.ID][index]-delivered[service.ID])
 		amount := math.Min(remaining, remainingNormalCapacity)
 		delivered[service.ID] += amount
@@ -136,8 +154,11 @@ func dispatchInterval(
 	generatorExcess := math.Max(0, generatorTotal-generatorForLoad)
 	renewableExcess := math.Max(0, renewableAvailable-renewableForLoad)
 	chargeInput := chargeBatteries(p, state, batteryDischarge, renewableExcess+generatorExcess)
-	renewableForCharge := math.Min(renewableExcess, sumValues(chargeInput))
-	assignRenewableUse(interval.Renewables, renewableForLoad+renewableForCharge)
+	totalChargeInput := sumValues(chargeInput)
+	renewableForCharge := math.Min(renewableExcess, totalChargeInput)
+	generatorForCharge := math.Min(generatorExcess, math.Max(0, totalChargeInput-renewableForCharge))
+	interval.DumpedPowerKW = round6(math.Max(0, generatorExcess-generatorForCharge))
+	assignRenewableUse(interval.Renewables, p.connectedAssets, renewableForLoad+renewableForCharge)
 
 	for _, asset := range p.scenario.Site.Assets {
 		switch asset.Type {
@@ -153,12 +174,19 @@ func dispatchInterval(
 			})
 		case domain.AssetDiesel:
 			output := generatorOutput[asset.ID]
-			fuelUsed := output * p.intervalHours * pointerValue(asset.LitersPerKWH)
+			started := output > epsilon && state.generatorOutput[asset.ID] <= epsilon
+			startupFuel := 0.0
+			if started {
+				startupFuel = pointerValue(asset.StartupFuelLiters)
+			}
+			fuelUsed := output*p.intervalHours*pointerValue(asset.LitersPerKWH) + startupFuel
 			interval.Generators = append(interval.Generators, domain.GeneratorDispatch{
 				AssetID:             asset.ID,
 				OutputKW:            round6(output),
 				Running:             output > epsilon,
+				Started:             started,
 				FuelUsedLiters:      round6(fuelUsed),
+				StartupFuelLiters:   round6(startupFuel),
 				FuelRemainingLiters: round6(state.fuel[asset.ID]),
 			})
 			interval.DieselCost += fuelUsed * pointerValue(asset.FuelCostPerLiter)
@@ -173,7 +201,12 @@ func dispatchInterval(
 		interval.UnservedEnergyKWH = round6(interval.UnservedEnergyKWH + remainingLoad*lossFactor*p.intervalHours)
 	}
 
-	return interval, collectDecisions(p, plan, state, index, interval, decisions)
+	result := collectDecisions(p, plan, index, interval, decisions)
+	for assetID, output := range generatorOutput {
+		state.generatorOutput[assetID] = output
+		state.running[assetID] = output > epsilon
+	}
+	return interval, result
 }
 
 func orderedServices(p *preparedScenario, plan servicePlan, index int, required bool) []domain.Service {
@@ -220,7 +253,7 @@ func batteryDischargeCapacity(p *preparedScenario, state *dispatchState) (map[st
 	normal := make(map[string]float64)
 	emergency := make(map[string]float64)
 	for _, asset := range p.scenario.Site.Assets {
-		if asset.Type != domain.AssetBattery {
+		if asset.Type != domain.AssetBattery || !p.connectedAssets[asset.ID] {
 			continue
 		}
 		efficiency := pointerValue(asset.DischargeEfficiency)
@@ -234,12 +267,24 @@ func batteryDischargeCapacity(p *preparedScenario, state *dispatchState) (map[st
 
 func generatorCapacity(p *preparedScenario, state *dispatchState) map[string]float64 {
 	capacity := make(map[string]float64)
-	for _, asset := range p.scenario.Site.Assets {
-		if asset.Type != domain.AssetDiesel {
+	for _, asset := range orderedGenerators(p.scenario.Site.Assets) {
+		if asset.Type != domain.AssetDiesel || !p.connectedAssets[asset.ID] {
 			continue
 		}
-		fuelBound := state.fuel[asset.ID] / pointerValue(asset.LitersPerKWH) / p.intervalHours
-		capacity[asset.ID] = math.Min(pointerValue(asset.MaximumOutputKW), fuelBound)
+		availableFuel := state.fuel[asset.ID]
+		if state.generatorOutput[asset.ID] <= epsilon {
+			availableFuel = math.Max(0, availableFuel-pointerValue(asset.StartupFuelLiters))
+		}
+		fuelBound := availableFuel / pointerValue(asset.LitersPerKWH) / p.intervalHours
+		maximum := pointerValue(asset.MaximumOutputKW)
+		if asset.RampRateKWPerMinute != nil {
+			maximum = math.Min(maximum, state.generatorOutput[asset.ID]+*asset.RampRateKWPerMinute*float64(p.scenario.Horizon.IntervalMinutes))
+		}
+		maximum = math.Min(maximum, fuelBound)
+		if maximum+epsilon < pointerValue(asset.MinimumOutputKW) {
+			maximum = 0
+		}
+		capacity[asset.ID] = math.Max(0, maximum)
 	}
 	return capacity
 }
@@ -252,7 +297,7 @@ func dischargeBatteries(
 ) (float64, map[string]float64) {
 	output := make(map[string]float64)
 	for _, asset := range p.scenario.Site.Assets {
-		if asset.Type != domain.AssetBattery || load <= epsilon {
+		if asset.Type != domain.AssetBattery || !p.connectedAssets[asset.ID] || load <= epsilon {
 			continue
 		}
 		amount := math.Min(capacity[asset.ID], load)
@@ -270,17 +315,57 @@ func runGenerators(
 	load float64,
 ) (float64, map[string]float64) {
 	output := make(map[string]float64)
-	for _, asset := range p.scenario.Site.Assets {
-		if asset.Type != domain.AssetDiesel || load <= epsilon {
+	for _, asset := range orderedGenerators(p.scenario.Site.Assets) {
+		if asset.Type != domain.AssetDiesel || !p.connectedAssets[asset.ID] {
 			continue
 		}
-		amount := math.Min(capacity[asset.ID], math.Max(pointerValue(asset.MinimumOutputKW), load))
-		fuelUsed := amount * p.intervalHours * pointerValue(asset.LitersPerKWH)
+		mustRun := state.minimumRunIntervals[asset.ID] > 0
+		if load <= epsilon && !mustRun {
+			continue
+		}
+		minimum := pointerValue(asset.MinimumOutputKW)
+		if asset.RampRateKWPerMinute != nil && state.generatorOutput[asset.ID] > epsilon {
+			minimum = math.Max(minimum, state.generatorOutput[asset.ID]-*asset.RampRateKWPerMinute*float64(p.scenario.Horizon.IntervalMinutes))
+		}
+		maximum := capacity[asset.ID]
+		if maximum+epsilon < minimum {
+			continue
+		}
+		amount := math.Min(maximum, math.Max(minimum, load))
+		started := state.generatorOutput[asset.ID] <= epsilon
+		startupFuel := 0.0
+		if started {
+			startupFuel = pointerValue(asset.StartupFuelLiters)
+			runtime := pointerValue(asset.MinimumRuntimeMinutes)
+			state.minimumRunIntervals[asset.ID] = int(math.Ceil(float64(runtime) / float64(p.scenario.Horizon.IntervalMinutes)))
+		}
+		fuelUsed := amount*p.intervalHours*pointerValue(asset.LitersPerKWH) + startupFuel
 		state.fuel[asset.ID] = math.Max(0, state.fuel[asset.ID]-fuelUsed)
 		output[asset.ID] = amount
 		load -= math.Min(load, amount)
+		if state.minimumRunIntervals[asset.ID] > 0 {
+			state.minimumRunIntervals[asset.ID]--
+		}
 	}
 	return math.Max(0, load), output
+}
+
+func orderedGenerators(assets []domain.Asset) []domain.Asset {
+	generators := make([]domain.Asset, 0)
+	for _, asset := range assets {
+		if asset.Type == domain.AssetDiesel {
+			generators = append(generators, asset)
+		}
+	}
+	sort.SliceStable(generators, func(i, j int) bool {
+		left := pointerValue(generators[i].LitersPerKWH) * pointerValue(generators[i].FuelCostPerLiter)
+		right := pointerValue(generators[j].LitersPerKWH) * pointerValue(generators[j].FuelCostPerLiter)
+		if math.Abs(left-right) < epsilon {
+			return generators[i].ID < generators[j].ID
+		}
+		return left < right
+	})
+	return generators
 }
 
 func chargeBatteries(
@@ -291,7 +376,7 @@ func chargeBatteries(
 ) map[string]float64 {
 	input := make(map[string]float64)
 	for _, asset := range p.scenario.Site.Assets {
-		if asset.Type != domain.AssetBattery || surplus <= epsilon || discharge[asset.ID] > epsilon {
+		if asset.Type != domain.AssetBattery || !p.chargeableBatteries[asset.ID] || surplus <= epsilon || discharge[asset.ID] > epsilon {
 			continue
 		}
 		energyRoomKW := (pointerValue(asset.CapacityKWH) - state.batteryEnergy[asset.ID]) / pointerValue(asset.ChargeEfficiency) / p.intervalHours
@@ -303,8 +388,12 @@ func chargeBatteries(
 	return input
 }
 
-func assignRenewableUse(dispatches []domain.RenewableDispatch, total float64) {
+func assignRenewableUse(dispatches []domain.RenewableDispatch, connected map[string]bool, total float64) {
 	for index := range dispatches {
+		if !connected[dispatches[index].AssetID] {
+			dispatches[index].CurtailedKW = dispatches[index].AvailableKW
+			continue
+		}
 		used := math.Min(dispatches[index].AvailableKW, total)
 		dispatches[index].UsedKW = round6(used)
 		dispatches[index].CurtailedKW = round6(dispatches[index].AvailableKW - used)
@@ -315,7 +404,6 @@ func assignRenewableUse(dispatches []domain.RenewableDispatch, total float64) {
 func collectDecisions(
 	p *preparedScenario,
 	plan servicePlan,
-	state *dispatchState,
 	index int,
 	interval domain.PlanInterval,
 	decisions *decisionState,
@@ -361,20 +449,18 @@ func collectDecisions(
 	}
 
 	for _, generator := range interval.Generators {
-		wasRunning := state.running[generator.AssetID]
-		if generator.Running && !wasRunning {
+		if generator.Started {
 			result = append(result, domain.Decision{
 				ID:                  fmt.Sprintf("decision-start-%s-%d", generator.AssetID, index),
 				IntervalIndex:       index,
 				Kind:                "start_generator",
 				Title:               p.assets[generator.AssetID].Name + " started",
-				Reason:              "Covered the supply deficit before committed service lost power.",
+				Reason:              "Covered demand after renewable power and normal battery discharge were exhausted.",
 				AffectedServiceIDs:  activeServiceIDs(plan, index),
 				AffectedContractIDs: activeContracts,
 				BaselineDifference:  fmt.Sprintf("Generated %.1f kW at %s.", generator.OutputKW, interval.Start.Format("15:04")),
 			})
 		}
-		state.running[generator.AssetID] = generator.Running
 	}
 
 	return result

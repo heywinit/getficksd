@@ -15,6 +15,7 @@ import (
 
 	"github.com/heywinit/wattson/backend/internal/database"
 	"github.com/heywinit/wattson/backend/internal/scheduler"
+	"github.com/heywinit/wattson/backend/internal/weather"
 )
 
 const version = "0.1.0"
@@ -29,6 +30,7 @@ type app struct {
 	config    config
 	store     *database.Store
 	scheduler *scheduler.Scheduler
+	weather   *weather.Client
 }
 
 type healthResponse struct {
@@ -111,7 +113,7 @@ func loadConfig() config {
 }
 
 func newApp(cfg config, store *database.Store, planner *scheduler.Scheduler) *app {
-	return &app{config: cfg, store: store, scheduler: planner}
+	return &app{config: cfg, store: store, scheduler: planner, weather: weather.NewClient()}
 }
 
 func (a *app) routes() http.Handler {
@@ -119,11 +121,18 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /health", a.health)
 	mux.HandleFunc("GET /v1/demo/operators", a.listDemoOperators)
 	mux.HandleFunc("GET /v1/demo/sites/{siteID}/scenario", a.getDemoScenario)
+	mux.HandleFunc("GET /v1/sites", a.listSites)
+	mux.HandleFunc("POST /v1/sites", a.createSite)
+	mux.HandleFunc("GET /v1/sites/{siteID}", a.getSite)
+	mux.HandleFunc("GET /v1/sites/{siteID}/forecast", a.getSiteForecast)
 	mux.HandleFunc("POST /v1/scenarios", a.createScenario)
+	mux.HandleFunc("GET /v1/scenarios", a.listScenarios)
 	mux.HandleFunc("GET /v1/scenarios/{scenarioID}", a.getScenario)
 	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}", a.replaceScenario)
+	mux.HandleFunc("DELETE /v1/scenarios/{scenarioID}", a.deleteScenario)
 	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}/signals/{signalID}", a.replaceSignalValues)
 	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}/initial-state", a.replaceInitialState)
+	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}/connections", a.replaceConnections)
 	mux.HandleFunc("POST /v1/scenarios/{scenarioID}/events", a.createScenarioEvent)
 	mux.HandleFunc("DELETE /v1/scenarios/{scenarioID}/events/{eventID}", a.deleteScenarioEvent)
 	mux.HandleFunc("POST /v1/plan-runs", a.createPlanRun)

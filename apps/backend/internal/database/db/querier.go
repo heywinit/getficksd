@@ -9,12 +9,17 @@ import (
 )
 
 type Querier interface {
+	DeletePlanRunsByScenario(ctx context.Context, scenarioID string) error
+	DeleteScenario(ctx context.Context, id string) (int64, error)
 	GetPlanRun(ctx context.Context, id string) (PlanRun, error)
 	GetScenario(ctx context.Context, id string) (Scenario, error)
 	GetScenarioBySite(ctx context.Context, siteID string) (Scenario, error)
 	InsertScenario(ctx context.Context, arg InsertScenarioParams) error
 	InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error
 	ListPlanRunsByScenario(ctx context.Context, arg ListPlanRunsByScenarioParams) ([]PlanRun, error)
+	ListScenarios(ctx context.Context, arg ListScenariosParams) ([]Scenario, error)
+	RecordDeletedScenario(ctx context.Context, arg RecordDeletedScenarioParams) error
+	ScenarioWasDeleted(ctx context.Context, id string) (int64, error)
 	UpdateScenario(ctx context.Context, arg UpdateScenarioParams) (int64, error)
 }
 

@@ -22,6 +22,7 @@ func ValidateScenario(scenario Scenario) error {
 	for _, service := range scenario.Site.Services {
 		services[service.ID] = service
 	}
+	validation.validateConnections(scenario.Site, assets, services)
 
 	validation.validateInitialState(scenario.InitialState, assets)
 	signals := validation.validateSignals(scenario.Signals, scenario.Horizon.IntervalCount, assets, services)
@@ -74,6 +75,7 @@ func (v *scenarioValidation) validateSite(site Site) map[string]Asset {
 		path := fmt.Sprintf("site.assets[%d]", index)
 		v.require(asset.ID != "", path+" id is required")
 		v.require(asset.Name != "", path+" name is required")
+		v.require(asset.ID != ControllerNodeID, path+" id is reserved for the controller")
 		if _, exists := assets[asset.ID]; asset.ID != "" && exists {
 			v.errors = append(v.errors, path+" id must be unique")
 		}
@@ -86,6 +88,10 @@ func (v *scenarioValidation) validateSite(site Site) map[string]Asset {
 		path := fmt.Sprintf("site.services[%d]", index)
 		v.require(service.ID != "", path+" id is required")
 		v.require(service.Name != "", path+" name is required")
+		v.require(service.ID != ControllerNodeID, path+" id is reserved for the controller")
+		if _, exists := assets[service.ID]; service.ID != "" && exists {
+			v.errors = append(v.errors, path+" id must not match an asset id")
+		}
 		v.require(service.Description != "", path+" description is required")
 		v.require(isPositive(service.RatedPowerKW), path+" rated_power_kw must be positive")
 		v.require(
@@ -99,6 +105,52 @@ func (v *scenarioValidation) validateSite(site Site) map[string]Asset {
 	}
 
 	return assets
+}
+
+func (v *scenarioValidation) validateConnections(site Site, assets map[string]Asset, services map[string]Service) {
+	connectionIDs := make(map[string]struct{}, len(site.Connections))
+	pairs := make(map[string]struct{}, len(site.Connections))
+	for index, connection := range site.Connections {
+		path := fmt.Sprintf("site.connections[%d]", index)
+		v.require(connection.ID != "", path+" id is required")
+		if _, exists := connectionIDs[connection.ID]; connection.ID != "" && exists {
+			v.errors = append(v.errors, path+" id must be unique")
+		}
+		connectionIDs[connection.ID] = struct{}{}
+		v.require(connection.SourceID != "", path+" source_id is required")
+		v.require(connection.TargetID != "", path+" target_id is required")
+		v.require(connection.SourceID != connection.TargetID, path+" must not connect a node to itself")
+		pair := connection.SourceID + "\x00" + connection.TargetID
+		if _, exists := pairs[pair]; exists {
+			v.errors = append(v.errors, path+" source_id and target_id pair must be unique")
+		}
+		pairs[pair] = struct{}{}
+
+		sourceAsset, sourceIsAsset := assets[connection.SourceID]
+		_, sourceIsService := services[connection.SourceID]
+		targetAsset, targetIsAsset := assets[connection.TargetID]
+		_, targetIsService := services[connection.TargetID]
+		sourceExists := sourceIsAsset || sourceIsService || connection.SourceID == ControllerNodeID
+		targetExists := targetIsAsset || targetIsService || connection.TargetID == ControllerNodeID
+		v.require(sourceExists, path+" source_id does not reference a node")
+		v.require(targetExists, path+" target_id does not reference a node")
+		if !sourceExists || !targetExists || connection.SourceID == connection.TargetID {
+			continue
+		}
+
+		allowed := false
+		if sourceIsAsset {
+			switch sourceAsset.Type {
+			case AssetSolar, AssetWind, AssetDiesel:
+				allowed = connection.TargetID == ControllerNodeID || (targetIsAsset && targetAsset.Type == AssetBattery)
+			case AssetBattery:
+				allowed = connection.TargetID == ControllerNodeID
+			}
+		} else if connection.SourceID == ControllerNodeID {
+			allowed = targetIsService || (targetIsAsset && targetAsset.Type == AssetBattery)
+		}
+		v.require(allowed, path+" direction is not allowed")
+	}
 }
 
 func (v *scenarioValidation) validateAsset(path string, asset Asset) {
@@ -119,6 +171,15 @@ func (v *scenarioValidation) validateAsset(path string, asset Asset) {
 		v.require(nonnegativePointer(asset.MinimumOutputKW), path+" minimum_output_kw must be nonnegative")
 		v.require(positivePointer(asset.MaximumOutputKW), path+" maximum_output_kw must be positive")
 		v.require(positivePointer(asset.LitersPerKWH), path+" liters_per_kwh must be positive")
+		if asset.StartupFuelLiters != nil {
+			v.require(isNonnegative(*asset.StartupFuelLiters), path+" startup_fuel_liters must be nonnegative")
+		}
+		if asset.MinimumRuntimeMinutes != nil {
+			v.require(*asset.MinimumRuntimeMinutes >= 0, path+" minimum_runtime_minutes must be nonnegative")
+		}
+		if asset.RampRateKWPerMinute != nil {
+			v.require(isPositive(*asset.RampRateKWPerMinute), path+" ramp_rate_kw_per_minute must be positive")
+		}
 		v.require(nonnegativePointer(asset.FuelCostPerLiter), path+" fuel_cost_per_liter must be nonnegative")
 		v.require(positivePointer(asset.EmissionsKGCO2PerLiter), path+" emissions_kg_co2_per_liter must be positive")
 		if asset.MinimumOutputKW != nil && asset.MaximumOutputKW != nil {
@@ -263,6 +324,10 @@ func (v *scenarioValidation) validateContracts(contracts []Contract, horizon Pla
 			v.require(contract.MinimumPowerKW == nil, path+" minimum_power_kw must be empty")
 			v.require(contract.RequiredRuntimeMinutes == nil, path+" required_runtime_minutes must be empty")
 			v.require(positivePointer(contract.RequiredEnergyKWH), path+" required_energy_kwh must be positive")
+			if serviceExists && contract.RequiredEnergyKWH != nil {
+				maximumEnergyKWH := service.RatedPowerKW * contract.Deadline.Sub(contract.WindowStart).Hours()
+				v.require(*contract.RequiredEnergyKWH <= maximumEnergyKWH, path+" required energy exceeds service capacity in the contract window")
+			}
 		default:
 			v.errors = append(v.errors, path+" kind is invalid")
 		}

@@ -10,6 +10,29 @@ import (
 	"database/sql"
 )
 
+const deletePlanRunsByScenario = `-- name: DeletePlanRunsByScenario :exec
+DELETE FROM plan_runs
+WHERE scenario_id = ?
+`
+
+func (q *Queries) DeletePlanRunsByScenario(ctx context.Context, scenarioID string) error {
+	_, err := q.db.ExecContext(ctx, deletePlanRunsByScenario, scenarioID)
+	return err
+}
+
+const deleteScenario = `-- name: DeleteScenario :execrows
+DELETE FROM scenarios
+WHERE id = ?
+`
+
+func (q *Queries) DeleteScenario(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteScenario, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getPlanRun = `-- name: GetPlanRun :one
 SELECT id, scenario_id, planner, status, created_at, parent_run_id, active_event_ids, document
 FROM plan_runs
@@ -149,6 +172,79 @@ func (q *Queries) ListPlanRunsByScenario(ctx context.Context, arg ListPlanRunsBy
 		return nil, err
 	}
 	return items, nil
+}
+
+const listScenarios = `-- name: ListScenarios :many
+SELECT id, site_id, name, schema_version, document, created_at
+FROM scenarios
+ORDER BY created_at DESC, id DESC
+LIMIT ? OFFSET ?
+`
+
+type ListScenariosParams struct {
+	Limit  int64 `json:"limit"`
+	Offset int64 `json:"offset"`
+}
+
+func (q *Queries) ListScenarios(ctx context.Context, arg ListScenariosParams) ([]Scenario, error) {
+	rows, err := q.db.QueryContext(ctx, listScenarios, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Scenario
+	for rows.Next() {
+		var i Scenario
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.Name,
+			&i.SchemaVersion,
+			&i.Document,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordDeletedScenario = `-- name: RecordDeletedScenario :exec
+INSERT INTO deleted_scenarios (id, deleted_at)
+VALUES (?, ?)
+ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at
+`
+
+type RecordDeletedScenarioParams struct {
+	ID        string `json:"id"`
+	DeletedAt string `json:"deleted_at"`
+}
+
+func (q *Queries) RecordDeletedScenario(ctx context.Context, arg RecordDeletedScenarioParams) error {
+	_, err := q.db.ExecContext(ctx, recordDeletedScenario, arg.ID, arg.DeletedAt)
+	return err
+}
+
+const scenarioWasDeleted = `-- name: ScenarioWasDeleted :one
+SELECT EXISTS(
+    SELECT 1
+    FROM deleted_scenarios
+    WHERE id = ?
+)
+`
+
+func (q *Queries) ScenarioWasDeleted(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, scenarioWasDeleted, id)
+	var deleted int64
+	err := row.Scan(&deleted)
+	return deleted, err
 }
 
 const insertScenario = `-- name: InsertScenario :exec

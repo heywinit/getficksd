@@ -58,6 +58,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/sites:
+    get:
+      operationId: listSites
+      description: Lists the latest persisted scenario for each site with capacity and latest plan metrics.
+      responses:
+        "200":
+          description: The persisted sites.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SiteSummary" }
+    post:
+      operationId: createSite
+      description: Creates a site with a starter solar grid and a validated 24-hour scenario.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSiteRequest" }
+      responses:
+        "201":
+          description: The created site summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SiteSummary" }
+        "400":
+          description: The site input is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A site with this generated ID already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/sites/{site_id}:
+    get:
+      operationId: getSite
+      parameters:
+        - name: site_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The site, its current scenario, counts, and latest plan summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SiteOverview" }
+        "404":
+          description: The site does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/sites/{site_id}/forecast:
+    get:
+      operationId: getSiteForecast
+      description: Returns a live or cached seven-day Open-Meteo forecast and asset-specific operating actions.
+      parameters:
+        - name: site_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The normalized weather forecast. A stale cache is returned only when Open-Meteo fails.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WeatherForecast" }
+        "404":
+          description: The site does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Open-Meteo failed and no cached forecast exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /v1/scenarios/{scenario_id}:
     get:
       operationId: getScenario
@@ -111,7 +191,82 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteScenario
+      description: Deletes the scenario and all plan runs that belong to it.
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: The scenario and its plan runs were deleted.
+        "404":
+          description: The scenario does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/scenarios/{scenario_id}/connections:
+    put:
+      operationId: replaceScenarioConnections
+      description: Replaces the complete directed connection graph and increments the scenario revision.
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionsRequest"
+      responses:
+        "200":
+          description: The updated full scenario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "400":
+          description: The connection graph is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: The scenario does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/scenarios:
+    get:
+      operationId: listScenarios
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: The available scenario revisions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScenarioSummary"
+        "400":
+          description: A pagination value is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       operationId: createScenario
       requestBody:
@@ -441,6 +596,261 @@ components:
         wind_capacity_kw: { type: number }
         battery_capacity_kwh: { type: number }
         diesel_capacity_kw: { type: number }
+    SiteScenarioIdentity:
+      type: object
+      additionalProperties: false
+      required: [id, name, revision]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        revision: { type: integer, minimum: 1 }
+        horizon: { $ref: "#/components/schemas/PlanningHorizon" }
+    SiteCapacity:
+      type: object
+      additionalProperties: false
+      required: [solar_kw, wind_kw, battery_kwh, diesel_kw]
+      properties:
+        solar_kw: { type: number, minimum: 0 }
+        wind_kw: { type: number, minimum: 0 }
+        battery_kwh: { type: number, minimum: 0 }
+        diesel_kw: { type: number, minimum: 0 }
+    LatestRunSummary:
+      type: object
+      additionalProperties: false
+      required: [id, scenario_id, planner, status, created_at, summary]
+      properties:
+        id: { type: string }
+        scenario_id: { type: string }
+        planner: { type: string, enum: [baseline, wattson] }
+        status: { type: string, enum: [computing, complete, infeasible, failed] }
+        created_at: { type: string, format: date-time }
+        summary: { $ref: "#/components/schemas/PlanSummary" }
+    SiteSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          name,
+          location,
+          timezone,
+          currency,
+          current_scenario,
+          capacity,
+          service_count,
+          commitment_count,
+          event_count,
+          latest_run,
+        ]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        location: { type: string }
+        timezone: { type: string }
+        currency: { type: string }
+        current_scenario: { $ref: "#/components/schemas/SiteScenarioIdentity" }
+        capacity: { $ref: "#/components/schemas/SiteCapacity" }
+        service_count: { type: integer, minimum: 0 }
+        commitment_count: { type: integer, minimum: 0 }
+        event_count: { type: integer, minimum: 0 }
+        latest_run:
+          oneOf:
+            - { $ref: "#/components/schemas/LatestRunSummary" }
+            - { type: "null" }
+    CreateSiteRequest:
+      type: object
+      additionalProperties: false
+      required: [name, location, timezone, currency, solar_capacity_kw, peak_demand_kw]
+      properties:
+        name: { type: string, minLength: 1 }
+        location: { type: string, minLength: 1 }
+        timezone: { type: string, minLength: 1 }
+        currency: { type: string, pattern: "^[A-Za-z]{3}$" }
+        solar_capacity_kw: { type: number, exclusiveMinimum: 0 }
+        peak_demand_kw: { type: number, exclusiveMinimum: 0 }
+    SiteOverview:
+      type: object
+      additionalProperties: false
+      required:
+        [site, current_scenario, commitment_count, event_count, active_event_count, latest_run]
+      properties:
+        site: { $ref: "#/components/schemas/Site" }
+        current_scenario: { $ref: "#/components/schemas/SiteScenarioIdentity" }
+        commitment_count: { type: integer, minimum: 0 }
+        event_count: { type: integer, minimum: 0 }
+        active_event_count: { type: integer, minimum: 0 }
+        latest_run:
+          oneOf:
+            - { $ref: "#/components/schemas/LatestRunSummary" }
+            - { type: "null" }
+    ForecastLocation:
+      type: object
+      additionalProperties: false
+      required: [name, latitude, longitude, timezone]
+      properties:
+        name: { type: string }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        timezone: { type: string }
+    ForecastProvider:
+      type: object
+      additionalProperties: false
+      required: [name, url, fetched_at, cache_status]
+      properties:
+        name: { type: string, const: Open-Meteo }
+        url: { type: string, format: uri }
+        fetched_at: { type: string, format: date-time }
+        cache_status: { type: string, enum: [live, fresh_cache, stale_cache] }
+    CurrentWeather:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          time,
+          temperature_c,
+          apparent_temperature_c,
+          precipitation_mm,
+          cloud_cover_percent,
+          wind_speed_kph,
+          wind_direction_degrees,
+          weather_code,
+          condition,
+          is_day,
+        ]
+      properties:
+        time: { type: string }
+        temperature_c: { type: number }
+        apparent_temperature_c: { type: number }
+        precipitation_mm: { type: number, minimum: 0 }
+        cloud_cover_percent: { type: number, minimum: 0, maximum: 100 }
+        wind_speed_kph: { type: number, minimum: 0 }
+        wind_direction_degrees: { type: number, minimum: 0, maximum: 360 }
+        weather_code: { type: integer }
+        condition: { type: string }
+        is_day: { type: boolean }
+    HourlyWeather:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          time,
+          temperature_c,
+          precipitation_probability_percent,
+          precipitation_mm,
+          cloud_cover_percent,
+          wind_speed_kph,
+          wind_gusts_kph,
+          shortwave_radiation_wm2,
+          weather_code,
+          condition,
+        ]
+      properties:
+        time: { type: string }
+        temperature_c: { type: number }
+        precipitation_probability_percent: { type: number, minimum: 0, maximum: 100 }
+        precipitation_mm: { type: number, minimum: 0 }
+        cloud_cover_percent: { type: number, minimum: 0, maximum: 100 }
+        wind_speed_kph: { type: number, minimum: 0 }
+        wind_gusts_kph: { type: number, minimum: 0 }
+        shortwave_radiation_wm2: { type: number, minimum: 0 }
+        weather_code: { type: integer }
+        condition: { type: string }
+    DailyWeather:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          date,
+          temperature_max_c,
+          temperature_min_c,
+          sunrise,
+          sunset,
+          precipitation_sum_mm,
+          precipitation_probability_max_percent,
+          wind_speed_max_kph,
+          wind_gusts_max_kph,
+          shortwave_radiation_sum_mj_m2,
+          weather_code,
+          condition,
+        ]
+      properties:
+        date: { type: string, format: date }
+        temperature_max_c: { type: number }
+        temperature_min_c: { type: number }
+        sunrise: { type: string }
+        sunset: { type: string }
+        precipitation_sum_mm: { type: number, minimum: 0 }
+        precipitation_probability_max_percent: { type: number, minimum: 0, maximum: 100 }
+        wind_speed_max_kph: { type: number, minimum: 0 }
+        wind_gusts_max_kph: { type: number, minimum: 0 }
+        shortwave_radiation_sum_mj_m2: { type: number, minimum: 0 }
+        weather_code: { type: integer }
+        condition: { type: string }
+    OperationalAction:
+      type: object
+      additionalProperties: false
+      required: [severity, category, title, reason, timeframe, asset_ids]
+      properties:
+        severity: { type: string, enum: [info, warning, critical] }
+        category: { type: string, enum: [solar, wind, storage, backup] }
+        title: { type: string }
+        reason: { type: string }
+        timeframe: { type: string }
+        asset_ids:
+          type: array
+          items: { type: string }
+    OperationalImpact:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          summary,
+          solar_capacity_kw,
+          wind_capacity_kw,
+          battery_capacity_kwh,
+          diesel_capacity_kw,
+          actions,
+        ]
+      properties:
+        summary: { type: string }
+        solar_capacity_kw: { type: number, minimum: 0 }
+        wind_capacity_kw: { type: number, minimum: 0 }
+        battery_capacity_kwh: { type: number, minimum: 0 }
+        diesel_capacity_kw: { type: number, minimum: 0 }
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/OperationalAction" }
+    WeatherForecast:
+      type: object
+      additionalProperties: false
+      required: [site_id, location, provider, current, hourly, daily, operational_impact]
+      properties:
+        site_id: { type: string }
+        location: { $ref: "#/components/schemas/ForecastLocation" }
+        provider: { $ref: "#/components/schemas/ForecastProvider" }
+        current: { $ref: "#/components/schemas/CurrentWeather" }
+        hourly:
+          type: array
+          items: { $ref: "#/components/schemas/HourlyWeather" }
+        daily:
+          type: array
+          items: { $ref: "#/components/schemas/DailyWeather" }
+        operational_impact: { $ref: "#/components/schemas/OperationalImpact" }
+    ScenarioSummary:
+      type: object
+      additionalProperties: false
+      required: [id, name, site_name, location, revision, horizon, contract_count, event_count]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        site_name: { type: string }
+        location: { type: string }
+        revision: { type: integer, minimum: 1 }
+        horizon:
+          $ref: "#/components/schemas/PlanningHorizon"
+        contract_count: { type: integer, minimum: 0 }
+        event_count: { type: integer, minimum: 0 }
     Scenario:
       type: object
       additionalProperties: false
@@ -486,7 +896,7 @@ components:
     Site:
       type: object
       additionalProperties: false
-      required: [id, name, location, timezone, currency, assets, services]
+      required: [id, name, location, timezone, currency, assets, services, connections]
       properties:
         id: { type: string }
         name: { type: string }
@@ -501,6 +911,28 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Service"
+        connections:
+          type: array
+          description: Directed power connections. The virtual bus node ID is `controller`.
+          items:
+            $ref: "#/components/schemas/Connection"
+    Connection:
+      type: object
+      additionalProperties: false
+      required: [id, source_id, target_id]
+      properties:
+        id: { type: string, minLength: 1 }
+        source_id: { type: string, minLength: 1 }
+        target_id: { type: string, minLength: 1 }
+    ConnectionsRequest:
+      type: object
+      additionalProperties: false
+      required: [connections]
+      properties:
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Connection"
     Asset:
       oneOf:
         - $ref: "#/components/schemas/RenewableAsset"
@@ -559,6 +991,9 @@ components:
         minimum_output_kw: { type: number, minimum: 0 }
         maximum_output_kw: { type: number, exclusiveMinimum: 0 }
         liters_per_kwh: { type: number, exclusiveMinimum: 0 }
+        startup_fuel_liters: { type: number, minimum: 0 }
+        minimum_runtime_minutes: { type: integer, minimum: 0 }
+        ramp_rate_kw_per_minute: { type: number, exclusiveMinimum: 0 }
         fuel_cost_per_liter: { type: number, minimum: 0 }
         emissions_kg_co2_per_liter: { type: number, exclusiveMinimum: 0 }
     Service:
@@ -775,6 +1210,7 @@ components:
         - id
         - scenario_id
         - scenario_revision
+        - scenario_snapshot_hash
         - planner
         - status
         - created_at
@@ -787,6 +1223,7 @@ components:
         id: { type: string }
         scenario_id: { type: string }
         scenario_revision: { type: integer, minimum: 1 }
+        scenario_snapshot_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
         parent_run_id: { type: string }
         planner: { type: string, enum: [baseline, wattson] }
         status: { type: string, enum: [computing, complete, infeasible, failed] }
@@ -823,6 +1260,7 @@ components:
         - services
         - contracts
         - losses_kw
+        - dumped_power_kw
         - diesel_cost
         - emissions_kg_co2
         - unserved_energy_kwh
@@ -852,6 +1290,7 @@ components:
           items:
             $ref: "#/components/schemas/ContractState"
         losses_kw: { type: number, minimum: 0 }
+        dumped_power_kw: { type: number, minimum: 0 }
         diesel_cost: { type: number, minimum: 0 }
         emissions_kg_co2: { type: number, minimum: 0 }
         unserved_energy_kwh: { type: number, minimum: 0 }
@@ -887,12 +1326,21 @@ components:
     GeneratorDispatch:
       type: object
       additionalProperties: false
-      required: [asset_id, output_kw, running, fuel_used_liters, fuel_remaining_liters]
+      required:
+        - asset_id
+        - output_kw
+        - running
+        - started
+        - fuel_used_liters
+        - startup_fuel_liters
+        - fuel_remaining_liters
       properties:
         asset_id: { type: string }
         output_kw: { type: number, minimum: 0 }
         running: { type: boolean }
+        started: { type: boolean }
         fuel_used_liters: { type: number, minimum: 0 }
+        startup_fuel_liters: { type: number, minimum: 0 }
         fuel_remaining_liters: { type: number, minimum: 0 }
     ServiceDelivery:
       type: object

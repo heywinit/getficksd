@@ -26,6 +26,9 @@ type Asset struct {
 	MinimumOutputKW        *float64 `json:"minimum_output_kw,omitempty"`
 	MaximumOutputKW        *float64 `json:"maximum_output_kw,omitempty"`
 	LitersPerKWH           *float64 `json:"liters_per_kwh,omitempty"`
+	StartupFuelLiters      *float64 `json:"startup_fuel_liters,omitempty"`
+	MinimumRuntimeMinutes  *int     `json:"minimum_runtime_minutes,omitempty"`
+	RampRateKWPerMinute    *float64 `json:"ramp_rate_kw_per_minute,omitempty"`
 	FuelCostPerLiter       *float64 `json:"fuel_cost_per_liter,omitempty"`
 	EmissionsKGCO2PerLiter *float64 `json:"emissions_kg_co2_per_liter,omitempty"`
 }
@@ -46,14 +49,24 @@ type Service struct {
 	RatedPowerKW float64     `json:"rated_power_kw"`
 }
 
+// ControllerNodeID is the stable ID of the site's virtual power bus.
+const ControllerNodeID = "controller"
+
+type Connection struct {
+	ID       string `json:"id"`
+	SourceID string `json:"source_id"`
+	TargetID string `json:"target_id"`
+}
+
 type Site struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Location string    `json:"location"`
-	Timezone string    `json:"timezone"`
-	Currency string    `json:"currency"`
-	Assets   []Asset   `json:"assets"`
-	Services []Service `json:"services"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Location    string       `json:"location"`
+	Timezone    string       `json:"timezone"`
+	Currency    string       `json:"currency"`
+	Assets      []Asset      `json:"assets"`
+	Services    []Service    `json:"services"`
+	Connections []Connection `json:"connections"`
 }
 
 type PlanningHorizon struct {
@@ -208,7 +221,9 @@ type GeneratorDispatch struct {
 	AssetID             string  `json:"asset_id"`
 	OutputKW            float64 `json:"output_kw"`
 	Running             bool    `json:"running"`
+	Started             bool    `json:"started"`
 	FuelUsedLiters      float64 `json:"fuel_used_liters"`
+	StartupFuelLiters   float64 `json:"startup_fuel_liters"`
 	FuelRemainingLiters float64 `json:"fuel_remaining_liters"`
 }
 
@@ -248,6 +263,7 @@ type PlanInterval struct {
 	Services          []ServiceDelivery   `json:"services"`
 	Contracts         []ContractState     `json:"contracts"`
 	LossesKW          float64             `json:"losses_kw"`
+	DumpedPowerKW     float64             `json:"dumped_power_kw"`
 	DieselCost        float64             `json:"diesel_cost"`
 	EmissionsKGCO2    float64             `json:"emissions_kg_co2"`
 	UnservedEnergyKWH float64             `json:"unserved_energy_kwh"`
@@ -289,6 +305,7 @@ type PlanRun struct {
 	ID               string            `json:"id"`
 	ScenarioID       string            `json:"scenario_id"`
 	ScenarioRevision int               `json:"scenario_revision"`
+	ScenarioHash     string            `json:"scenario_snapshot_hash"`
 	ParentRunID      string            `json:"parent_run_id,omitempty"`
 	Planner          Planner           `json:"planner"`
 	Status           PlanStatus        `json:"status"`
@@ -298,4 +315,95 @@ type PlanRun struct {
 	ContractOutcomes []ContractOutcome `json:"contract_outcomes"`
 	Decisions        []Decision        `json:"decisions"`
 	Summary          PlanSummary       `json:"summary"`
+}
+
+type ForecastCacheStatus string
+
+const (
+	CacheStatusLive       ForecastCacheStatus = "live"
+	CacheStatusFreshCache ForecastCacheStatus = "fresh_cache"
+	CacheStatusStaleCache ForecastCacheStatus = "stale_cache"
+)
+
+type ForecastLocation struct {
+	Name      string  `json:"name"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Timezone  string  `json:"timezone"`
+}
+
+type ForecastProvider struct {
+	Name        string              `json:"name"`
+	URL         string              `json:"url"`
+	FetchedAt   time.Time           `json:"fetched_at"`
+	CacheStatus ForecastCacheStatus `json:"cache_status"`
+}
+
+type CurrentWeather struct {
+	Time                 string  `json:"time"`
+	TemperatureC         float64 `json:"temperature_c"`
+	ApparentTemperatureC float64 `json:"apparent_temperature_c"`
+	PrecipitationMM      float64 `json:"precipitation_mm"`
+	CloudCoverPercent    float64 `json:"cloud_cover_percent"`
+	WindSpeedKPH         float64 `json:"wind_speed_kph"`
+	WindDirectionDegrees float64 `json:"wind_direction_degrees"`
+	WeatherCode          int     `json:"weather_code"`
+	Condition            string  `json:"condition"`
+	IsDay                bool    `json:"is_day"`
+}
+
+type HourlyWeather struct {
+	Time                            string  `json:"time"`
+	TemperatureC                    float64 `json:"temperature_c"`
+	PrecipitationProbabilityPercent float64 `json:"precipitation_probability_percent"`
+	PrecipitationMM                 float64 `json:"precipitation_mm"`
+	CloudCoverPercent               float64 `json:"cloud_cover_percent"`
+	WindSpeedKPH                    float64 `json:"wind_speed_kph"`
+	WindGustsKPH                    float64 `json:"wind_gusts_kph"`
+	ShortwaveRadiationWM2           float64 `json:"shortwave_radiation_wm2"`
+	WeatherCode                     int     `json:"weather_code"`
+	Condition                       string  `json:"condition"`
+}
+
+type DailyWeather struct {
+	Date                               string  `json:"date"`
+	TemperatureMaxC                    float64 `json:"temperature_max_c"`
+	TemperatureMinC                    float64 `json:"temperature_min_c"`
+	Sunrise                            string  `json:"sunrise"`
+	Sunset                             string  `json:"sunset"`
+	PrecipitationSumMM                 float64 `json:"precipitation_sum_mm"`
+	PrecipitationProbabilityMaxPercent float64 `json:"precipitation_probability_max_percent"`
+	WindSpeedMaxKPH                    float64 `json:"wind_speed_max_kph"`
+	WindGustsMaxKPH                    float64 `json:"wind_gusts_max_kph"`
+	ShortwaveRadiationSumMJM2          float64 `json:"shortwave_radiation_sum_mj_m2"`
+	WeatherCode                        int     `json:"weather_code"`
+	Condition                          string  `json:"condition"`
+}
+
+type OperationalAction struct {
+	Severity  string   `json:"severity"`
+	Category  string   `json:"category"`
+	Title     string   `json:"title"`
+	Reason    string   `json:"reason"`
+	Timeframe string   `json:"timeframe"`
+	AssetIDs  []string `json:"asset_ids"`
+}
+
+type OperationalImpact struct {
+	Summary            string              `json:"summary"`
+	SolarCapacityKW    float64             `json:"solar_capacity_kw"`
+	WindCapacityKW     float64             `json:"wind_capacity_kw"`
+	BatteryCapacityKWH float64             `json:"battery_capacity_kwh"`
+	DieselCapacityKW   float64             `json:"diesel_capacity_kw"`
+	Actions            []OperationalAction `json:"actions"`
+}
+
+type WeatherForecast struct {
+	SiteID            string            `json:"site_id"`
+	Location          ForecastLocation  `json:"location"`
+	Provider          ForecastProvider  `json:"provider"`
+	Current           CurrentWeather    `json:"current"`
+	Hourly            []HourlyWeather   `json:"hourly"`
+	Daily             []DailyWeather    `json:"daily"`
+	OperationalImpact OperationalImpact `json:"operational_impact"`
 }

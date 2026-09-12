@@ -130,6 +130,105 @@ func TestGetDemoScenarioReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestListScenarios(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/v1/scenarios", nil)
+	response := httptest.NewRecorder()
+	testApp(t).routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", response.Code, response.Body.String())
+	}
+	var scenarios []scenarioSummary
+	if err := json.NewDecoder(response.Body).Decode(&scenarios); err != nil {
+		t.Fatalf("decode scenarios: %v", err)
+	}
+	if len(scenarios) != 1 || scenarios[0].ID != "spiti-valley-community-v2" {
+		t.Fatalf("unexpected scenarios: %#v", scenarios)
+	}
+	if scenarios[0].Revision != 1 || scenarios[0].ContractCount != 7 || scenarios[0].EventCount != 3 {
+		t.Fatalf("unexpected scenario summary: %#v", scenarios[0])
+	}
+}
+
+func TestReplaceConnectionsPersistsGraphAndIncrementsRevision(t *testing.T) {
+	application := testApp(t)
+	body := `{"connections":[
+		{"id":"solar-battery","source_id":"spiti-solar","target_id":"spiti-battery"},
+		{"id":"battery-controller","source_id":"spiti-battery","target_id":"controller"},
+		{"id":"controller-health","source_id":"controller","target_id":"health-center"}
+	]}`
+	request := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-community-v2/connections", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	application.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", response.Code, response.Body.String())
+	}
+	var updated domain.Scenario
+	if err := json.NewDecoder(response.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated scenario: %v", err)
+	}
+	if updated.Revision != 2 || len(updated.Site.Connections) != 3 {
+		t.Fatalf("unexpected connection update: %#v", updated.Site.Connections)
+	}
+
+	stored, err := application.store.Scenario(context.Background(), updated.ID)
+	if err != nil {
+		t.Fatalf("load updated scenario: %v", err)
+	}
+	if stored.Revision != 2 || len(stored.Site.Connections) != 3 || stored.Site.Connections[0].ID != "solar-battery" {
+		t.Fatalf("connection graph was not persisted: %#v", stored.Site.Connections)
+	}
+}
+
+func TestReplaceConnectionsRejectsInvalidGraphWithoutIncrement(t *testing.T) {
+	application := testApp(t)
+	request := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-community-v2/connections", strings.NewReader(
+		`{"connections":[{"id":"bad","source_id":"health-center","target_id":"controller"}]}`,
+	))
+	response := httptest.NewRecorder()
+	application.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "direction is not allowed") {
+		t.Fatalf("expected invalid direction status 400, got %d: %s", response.Code, response.Body.String())
+	}
+	stored, err := application.store.Scenario(context.Background(), "spiti-valley-community-v2")
+	if err != nil {
+		t.Fatalf("load unchanged scenario: %v", err)
+	}
+	if stored.Revision != 1 {
+		t.Fatalf("expected revision 1 after rejected update, got %d", stored.Revision)
+	}
+}
+
+func TestDeleteScenarioRemovesRunsAndPreventsReseed(t *testing.T) {
+	application := testApp(t)
+	planRequest := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(`{
+		"scenario_id":"spiti-valley-community-v2",
+		"planner":"baseline",
+		"active_event_ids":[]
+	}`))
+	planResponse := httptest.NewRecorder()
+	application.routes().ServeHTTP(planResponse, planRequest)
+	if planResponse.Code != http.StatusCreated {
+		t.Fatalf("expected plan status 201, got %d: %s", planResponse.Code, planResponse.Body.String())
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/v1/scenarios/spiti-valley-community-v2", nil)
+	deleteResponse := httptest.NewRecorder()
+	application.routes().ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusNoContent {
+		t.Fatalf("expected delete status 204, got %d: %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+	if err := seedDemoScenarios(context.Background(), application.store); err != nil {
+		t.Fatalf("seed after deletion: %v", err)
+	}
+	getRequest := httptest.NewRequest(http.MethodGet, "/v1/scenarios/spiti-valley-community-v2", nil)
+	getResponse := httptest.NewRecorder()
+	application.routes().ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusNotFound {
+		t.Fatalf("expected deleted scenario to stay deleted, got %d", getResponse.Code)
+	}
+}
+
 func TestCORSAllowsConfiguredOrigin(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/health", nil)
 	request.Header.Set("Origin", "http://localhost:3001")
@@ -145,9 +244,9 @@ func TestCORSAllowsConfiguredOrigin(t *testing.T) {
 func TestCreateAndReadPlanRun(t *testing.T) {
 	application := testApp(t)
 	request := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"wattson",
-		"active_event_ids":["midday-solar-shortfall","evening-fuel-delay"]
+		"active_event_ids":["midday-cloud-cover","evening-household-surge","evening-fuel-delay"]
 	}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -160,7 +259,7 @@ func TestCreateAndReadPlanRun(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
 		t.Fatalf("decode plan run: %v", err)
 	}
-	if created.Status != domain.PlanComplete || created.Summary.ContractsMet != 2 {
+	if created.Status != domain.PlanComplete || created.Summary.ContractsMet != 7 {
 		t.Fatalf("unexpected plan run: %#v", created)
 	}
 
@@ -171,7 +270,7 @@ func TestCreateAndReadPlanRun(t *testing.T) {
 		t.Fatalf("expected persisted plan run, got %d", getResponse.Code)
 	}
 
-	listRequest := httptest.NewRequest(http.MethodGet, "/v1/scenarios/spiti-valley-default/plan-runs", nil)
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/scenarios/spiti-valley-community-v2/plan-runs", nil)
 	listResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(listResponse, listRequest)
 	if listResponse.Code != http.StatusOK {
@@ -188,7 +287,7 @@ func TestCreateAndReadPlanRun(t *testing.T) {
 
 func TestCreatePlanRunRejectsUnknownEvent(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"wattson",
 		"active_event_ids":["missing-event"]
 	}`))
@@ -202,7 +301,7 @@ func TestCreatePlanRunRejectsUnknownEvent(t *testing.T) {
 func TestPlanRunIncludesMeasuredParentComparison(t *testing.T) {
 	application := testApp(t)
 	baselineRequest := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"baseline",
 		"active_event_ids":[]
 	}`))
@@ -217,9 +316,9 @@ func TestPlanRunIncludesMeasuredParentComparison(t *testing.T) {
 	}
 
 	candidateBody := fmt.Sprintf(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"wattson",
-		"active_event_ids":["midday-solar-shortfall","evening-fuel-delay"],
+		"active_event_ids":["midday-cloud-cover","evening-household-surge","evening-fuel-delay"],
 		"parent_run_id":%q
 	}`, baseline.ID)
 	candidateRequest := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(candidateBody))
@@ -237,6 +336,9 @@ func TestPlanRunIncludesMeasuredParentComparison(t *testing.T) {
 	}
 	if candidate.ScenarioRevision < 1 || candidate.ScenarioRevision != baseline.ScenarioRevision {
 		t.Fatalf("comparison did not preserve its scenario revision: baseline=%d candidate=%d", baseline.ScenarioRevision, candidate.ScenarioRevision)
+	}
+	if candidate.ScenarioHash == "" || candidate.ScenarioHash != baseline.ScenarioHash {
+		t.Fatalf("comparison did not preserve its scenario snapshot hash")
 	}
 	if candidate.Comparison.BaselineRunID != baseline.ID || len(candidate.Comparison.Intervals) != 96 {
 		t.Fatalf("unexpected comparison: %#v", candidate.Comparison)
@@ -284,9 +386,9 @@ func TestPlanRunIncludesMeasuredParentComparison(t *testing.T) {
 func TestPlanRunRejectsStaleOrEventAffectedBaseline(t *testing.T) {
 	application := testApp(t)
 	eventBaseline := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"baseline",
-		"active_event_ids":["midday-solar-shortfall"]
+		"active_event_ids":["midday-cloud-cover"]
 	}`))
 	eventBaselineResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(eventBaselineResponse, eventBaseline)
@@ -295,7 +397,7 @@ func TestPlanRunRejectsStaleOrEventAffectedBaseline(t *testing.T) {
 	}
 
 	baselineRequest := httptest.NewRequest(http.MethodPost, "/v1/plan-runs", strings.NewReader(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"baseline",
 		"active_event_ids":[]
 	}`))
@@ -309,7 +411,7 @@ func TestPlanRunRejectsStaleOrEventAffectedBaseline(t *testing.T) {
 		t.Fatalf("decode baseline: %v", err)
 	}
 
-	scenario, err := application.store.Scenario(context.Background(), "spiti-valley-default")
+	scenario, err := application.store.Scenario(context.Background(), "spiti-valley-community-v2")
 	if err != nil {
 		t.Fatalf("load scenario: %v", err)
 	}
@@ -318,7 +420,7 @@ func TestPlanRunRejectsStaleOrEventAffectedBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode scenario: %v", err)
 	}
-	replaceRequest := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-default", strings.NewReader(string(scenarioBody)))
+	replaceRequest := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-community-v2", strings.NewReader(string(scenarioBody)))
 	replaceResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(replaceResponse, replaceRequest)
 	if replaceResponse.Code != http.StatusOK {
@@ -326,7 +428,7 @@ func TestPlanRunRejectsStaleOrEventAffectedBaseline(t *testing.T) {
 	}
 
 	candidateBody := fmt.Sprintf(`{
-		"scenario_id":"spiti-valley-default",
+		"scenario_id":"spiti-valley-community-v2",
 		"planner":"wattson",
 		"active_event_ids":[],
 		"parent_run_id":%q
@@ -415,7 +517,7 @@ func TestScenarioCreateReplaceAndLiveInputs(t *testing.T) {
 		t.Fatalf("expected initial state status 200, got %d: %s", stateResponse.Code, stateResponse.Body.String())
 	}
 
-	eventBody := `{"id":"new-solar-event","name":"New solar shortfall","type":"renewable_shortfall","signal_id":"spiti-solar-forecast","start":"2026-09-12T01:00:00Z","end":"2026-09-12T02:00:00Z","availability_multiplier":0.5}`
+	eventBody := `{"id":"new-solar-event","name":"New solar shortfall","type":"renewable_shortfall","signal_id":"spiti-solar-forecast","start":"2026-10-17T19:00:00Z","end":"2026-10-17T20:00:00Z","availability_multiplier":0.5}`
 	eventRequest := httptest.NewRequest(http.MethodPost, "/v1/scenarios/editable-scenario/events", strings.NewReader(eventBody))
 	eventResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(eventResponse, eventRequest)
@@ -438,7 +540,7 @@ func TestScenarioCreateReplaceAndLiveInputs(t *testing.T) {
 
 func TestDemoSeedPreservesScenarioEdits(t *testing.T) {
 	application := testApp(t)
-	scenario, err := application.store.Scenario(context.Background(), "spiti-valley-default")
+	scenario, err := application.store.Scenario(context.Background(), "spiti-valley-community-v2")
 	if err != nil {
 		t.Fatalf("load seeded scenario: %v", err)
 	}
@@ -449,7 +551,7 @@ func TestDemoSeedPreservesScenarioEdits(t *testing.T) {
 	if err := seedDemoScenarios(context.Background(), application.store); err != nil {
 		t.Fatalf("seed scenario again: %v", err)
 	}
-	reloaded, err := application.store.Scenario(context.Background(), "spiti-valley-default")
+	reloaded, err := application.store.Scenario(context.Background(), "spiti-valley-community-v2")
 	if err != nil {
 		t.Fatalf("load scenario after seed: %v", err)
 	}
@@ -458,23 +560,66 @@ func TestDemoSeedPreservesScenarioEdits(t *testing.T) {
 	}
 }
 
+func TestScenarioReplacementAllowsBatteryRemoval(t *testing.T) {
+	application := testApp(t)
+	scenario, err := application.store.Scenario(context.Background(), "spiti-valley-community-v2")
+	if err != nil {
+		t.Fatalf("load seeded scenario: %v", err)
+	}
+	assets := scenario.Site.Assets[:0]
+	for _, asset := range scenario.Site.Assets {
+		if asset.Type != domain.AssetBattery {
+			assets = append(assets, asset)
+		}
+	}
+	scenario.Site.Assets = assets
+	states := scenario.InitialState.Assets[:0]
+	for _, state := range scenario.InitialState.Assets {
+		if state.Type != domain.AssetBattery {
+			states = append(states, state)
+		}
+	}
+	scenario.InitialState.Assets = states
+	body, err := json.Marshal(scenario)
+	if err != nil {
+		t.Fatalf("encode scenario: %v", err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/scenarios/spiti-valley-community-v2",
+		strings.NewReader(string(body)),
+	)
+	response := httptest.NewRecorder()
+	application.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected battery removal status 200, got %d: %s", response.Code, response.Body.String())
+	}
+	var saved domain.Scenario
+	if err := json.NewDecoder(response.Body).Decode(&saved); err != nil {
+		t.Fatalf("decode saved scenario: %v", err)
+	}
+	if saved.OperatingPolicy.ReserveEnergyKWH != 0 {
+		t.Fatalf("expected reserve to reset to zero without batteries, got %.3f", saved.OperatingPolicy.ReserveEnergyKWH)
+	}
+}
+
 func TestScenarioUpdatesRejectInvalidInput(t *testing.T) {
 	application := testApp(t)
-	mismatchRequest := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-default", strings.NewReader(`{"id":"other"}`))
+	mismatchRequest := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-community-v2", strings.NewReader(`{"id":"other"}`))
 	mismatchResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(mismatchResponse, mismatchRequest)
 	if mismatchResponse.Code != http.StatusBadRequest {
 		t.Fatalf("expected ID mismatch status 400, got %d", mismatchResponse.Code)
 	}
 
-	invalidSignalRequest := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-default/signals/spiti-solar-forecast", strings.NewReader(`{"values":[1]}`))
+	invalidSignalRequest := httptest.NewRequest(http.MethodPut, "/v1/scenarios/spiti-valley-community-v2/signals/spiti-solar-forecast", strings.NewReader(`{"values":[1]}`))
 	invalidSignalResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(invalidSignalResponse, invalidSignalRequest)
 	if invalidSignalResponse.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid signal status 400, got %d: %s", invalidSignalResponse.Code, invalidSignalResponse.Body.String())
 	}
 
-	missingEventRequest := httptest.NewRequest(http.MethodDelete, "/v1/scenarios/spiti-valley-default/events/missing", nil)
+	missingEventRequest := httptest.NewRequest(http.MethodDelete, "/v1/scenarios/spiti-valley-community-v2/events/missing", nil)
 	missingEventResponse := httptest.NewRecorder()
 	application.routes().ServeHTTP(missingEventResponse, missingEventRequest)
 	if missingEventResponse.Code != http.StatusNotFound {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +40,11 @@ func (a *app) createPlanRun(response http.ResponseWriter, request *http.Request)
 		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenario could not be loaded."})
 		return
 	}
+	scenarioHash, err := scenarioSnapshotHash(scenario)
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenario snapshot could not be recorded."})
+		return
+	}
 	var parentRun *domain.PlanRun
 	if planningRequest.ParentRunID != "" {
 		parent, err := a.store.PlanRun(request.Context(), planningRequest.ParentRunID)
@@ -53,7 +60,7 @@ func (a *app) createPlanRun(response http.ResponseWriter, request *http.Request)
 			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The parent plan run does not belong to this scenario."})
 			return
 		}
-		if parent.ScenarioRevision != scenario.Revision {
+		if parent.ScenarioRevision != scenario.Revision || parent.ScenarioHash != scenarioHash {
 			writeJSON(response, http.StatusConflict, map[string]string{"message": "The parent plan run uses an older scenario revision. Create a fresh baseline."})
 			return
 		}
@@ -83,6 +90,7 @@ func (a *app) createPlanRun(response http.ResponseWriter, request *http.Request)
 	}
 	run.ParentRunID = planningRequest.ParentRunID
 	run.ScenarioRevision = scenario.Revision
+	run.ScenarioHash = scenarioHash
 	var result *comparison.Result
 	if parentRun != nil {
 		for index := range run.Decisions {
@@ -155,7 +163,7 @@ func (a *app) comparisonForRun(request *http.Request, run domain.PlanRun) (*comp
 	if err != nil {
 		return nil, err
 	}
-	if parent.ScenarioID != run.ScenarioID || parent.ScenarioRevision != run.ScenarioRevision {
+	if parent.ScenarioID != run.ScenarioID || parent.ScenarioRevision != run.ScenarioRevision || parent.ScenarioHash != run.ScenarioHash {
 		return nil, errors.New("plan run and baseline use different scenario revisions")
 	}
 	result, err := comparison.Compare(parent, run)
@@ -163,6 +171,15 @@ func (a *app) comparisonForRun(request *http.Request, run domain.PlanRun) (*comp
 		return nil, err
 	}
 	return &result, nil
+}
+
+func scenarioSnapshotHash(scenario domain.Scenario) (string, error) {
+	document, err := json.Marshal(scenario)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(document)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (a *app) listPlanRuns(response http.ResponseWriter, request *http.Request) {
