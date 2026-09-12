@@ -1,144 +1,79 @@
-# getficksd
+# Wattson
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Start, Self, TRPC, and more.
+Wattson uses TanStack Start for the web application and Go for the backend.
 
-## Features
+The repository contains the clean application foundation and the first version of Wattson's energy domain. The optimizer will be added later.
 
-- **TypeScript** - For type safety and improved developer experience
-- **TanStack Start** - SSR framework with TanStack Router
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **tRPC** - End-to-end type-safe APIs
-- **Drizzle** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
-- **Vite+** - Unified Vite toolchain, workspace task runner, linting, and formatting
+The demo uses four seeded operators. Each operator owns a different site, and the selected operator stays in local browser storage. Spiti Valley has the first validated 24-hour scenario.
 
-## Getting Started
+## Structure
 
-First, install the dependencies:
+```text
+apps/
+├── backend/    # Go HTTP service
+└── web/        # TanStack Start application
+packages/
+├── config/     # Shared TypeScript configuration
+├── infra/      # Cloudflare deployment
+└── ui/         # Shared React components
+```
+
+## Local development
+
+Install the JavaScript dependencies:
 
 ```bash
 bun install
 ```
 
-## Database Setup
-
-This project uses PostgreSQL with Drizzle ORM.
-
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/web/.env` file with your PostgreSQL connection details.
-
-3. Apply the schema to your database:
+Copy the web environment file:
 
 ```bash
-bun run db:push
+cp apps/web/.env.example apps/web/.env
 ```
 
-Then, run the development server:
+Start both applications:
 
 ```bash
 bun run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the fullstack application.
+The web application uses port `3001`. The Go backend uses port `8080`.
 
-## Local email
+The TanStack server proxies these same-origin routes to Go:
 
-The local SMTP service uses Mailpit. It accepts email on port `1025` and shows messages at [localhost:8025](http://localhost:8025).
+- `/api/backend/health`
+- `/api/backend/events`
+- `/api/backend/demo/operators`
+- `/api/backend/demo/sites/:siteId/scenario`
 
-```bash
-bun run dev:smtp
-```
+Set `BACKEND_URL` to the private or public URL of the Go service.
 
-Copy the SMTP values from `apps/web/.env.example` into `apps/web/.env`. Mailpit does not require a username or password.
+## Scenario data
 
-## UI Customization
+The first seed lives at `apps/backend/seeddata/spiti-valley-default.json`. It contains the site, assets, services, contracts, signals, disruptions, and all 96 fifteen-minute values for one day.
 
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
-
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
-
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
+Regenerate it after changing its source model:
 
 ```bash
-npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
+cd apps/backend
+go run ./cmd/generate-seeds
 ```
 
-Import shared components like this:
+The backend validates every embedded scenario when it starts.
 
-```tsx
-import { Button } from "@getficksd/ui/components/button";
+## Checks
+
+```bash
+bun run check
 ```
-
-### Add app-specific blocks
-
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
 
 ## Deployment
 
-### Alchemy
+The web application deploys to Cloudflare through Alchemy.
 
-- Target: web on Cloudflare
-- Database connections: Cloudflare Hyperdrive backed by PostgreSQL
-- Configure provider login: `cd packages/infra && bunx alchemy login --configure`
-- Dev: bun run dev
-- Deploy: bun run deploy
-- Destroy: bun run destroy
+The Go backend deploys to a VPS. See `apps/backend/README.md` and `deploy/wattson-backend.service`.
 
-`alchemy login --configure` stores the selected Cloudflare, Neon, PlanetScale, and/or Prisma provider profiles under `~/.alchemy`; no provider-specific setup command is required by this scaffold.
+## Template archive
 
-`DATABASE_URL` supplies the Hyperdrive origin during deployment and remains available to the local Drizzle commands. Use a non-pooled database URL for deployment.
-
-Deploys are staged and default to a personal `dev_<username>` stage. For production, run the deploy with an explicit stage from `packages/infra`:
-
-```bash
-cd packages/infra && bunx alchemy deploy --stage production
-```
-
-## Git Hooks and Formatting
-
-- Optional native Vite+ hooks: `bun run hooks:setup`
-- Docs: [Vite+ commit hooks](https://viteplus.dev/guide/commit-hooks)
-- Run checks: `bun run check`
-
-## Project Structure
-
-```
-getficksd/
-├── apps/
-│   ├── web/         # Fullstack application (React + TanStack Start)
-│   └── python/      # Optional FastAPI data and ML service
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
-│   ├── api/         # API layer / business logic
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
-```
-
-## Available Scripts
-
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run dev:python`: Start the optional Python API on port 8000
-- `bun run dev:smtp`: Start the local SMTP service and email inbox
-- `bun run dev:smtp:down`: Stop the local SMTP service
-- `bun run dev:smtp:logs`: Follow logs from the local SMTP service
-- `bun run check:python`: Lint and test the Python API
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
-- `bun run db:generate`: Generate database client/types
-- `bun run db:migrate`: Run database migrations
-- `bun run db:studio`: Open database studio UI
-- `bun run db:seed`: Add a sample dataset to the first user's workspace
-- `bun run db:reset -- --yes`: Delete application data while keeping the schema
-- `bun run check`: Run Vite+ format/lint checks and workspace TypeScript checks
-- `bun run lint`: Run Vite+ lint checks
-- `bun run format`: Run Vite+ formatting
-- `bun run staged`: Run Vite+ checks against staged files
-- `bun run hooks:setup`: Install Vite+ native Git hooks with `vp config`
+Removed template features remain under `.template-archive` during the migration. Remove this archive after the new structure is accepted.
