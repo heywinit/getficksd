@@ -6,28 +6,32 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/heywinit/wattson/backend/internal/domain"
 )
 
 func main() {
-	output := flag.String("output", "seeddata/spiti-valley-default.json", "path for the generated scenario")
+	outputDirectory := flag.String("output-dir", "seeddata", "directory for the generated scenarios")
 	flag.Parse()
 
-	scenario := spitiValleyScenario()
-	domain.NormalizeScenarioConnections(&scenario)
-	if err := domain.ValidateScenario(scenario); err != nil {
-		panic(fmt.Errorf("validate seed scenario: %w", err))
-	}
+	for _, seed := range communityScenarios() {
+		scenario := seed.Scenario
+		domain.NormalizeScenarioConnections(&scenario)
+		if err := domain.ValidateScenario(scenario); err != nil {
+			panic(fmt.Errorf("validate seed scenario %q: %w", scenario.ID, err))
+		}
 
-	data, err := json.MarshalIndent(scenario, "", "  ")
-	if err != nil {
-		panic(fmt.Errorf("encode seed scenario: %w", err))
-	}
-	data = append(data, '\n')
-	if err := os.WriteFile(*output, data, 0o644); err != nil {
-		panic(fmt.Errorf("write seed scenario: %w", err))
+		data, err := json.MarshalIndent(scenario, "", "  ")
+		if err != nil {
+			panic(fmt.Errorf("encode seed scenario %q: %w", scenario.ID, err))
+		}
+		data = append(data, '\n')
+		path := filepath.Join(*outputDirectory, seed.Filename)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			panic(fmt.Errorf("write seed scenario %q: %w", scenario.ID, err))
+		}
 	}
 }
 
@@ -115,6 +119,20 @@ func spitiValleyScenario() domain.Scenario {
 				{ID: "households", Name: "Village households", Description: "Lighting, cooking, heating circulation, appliances, and device charging.", ControlMode: domain.ControlCurtailable, RatedPowerKW: 140},
 				{ID: "street-lighting", Name: "Street lighting", Description: "Road, footpath, and public safety lighting after sunset.", ControlMode: domain.ControlFixed, RatedPowerKW: 18},
 				{ID: "food-cold-storage", Name: "Food cold storage", Description: "Community produce, dairy, and winter food preservation.", ControlMode: domain.ControlFixed, RatedPowerKW: 28},
+			},
+			Connections: []domain.Connection{
+				{ID: "connection:spiti-solar:spiti-battery", SourceID: "spiti-solar", TargetID: "spiti-battery"},
+				{ID: "connection:spiti-wind:spiti-battery", SourceID: "spiti-wind", TargetID: "spiti-battery"},
+				{ID: "connection:spiti-battery:controller", SourceID: "spiti-battery", TargetID: domain.ControllerNodeID},
+				{ID: "connection:spiti-diesel:controller", SourceID: "spiti-diesel", TargetID: domain.ControllerNodeID},
+				{ID: "connection:controller:health-center", SourceID: domain.ControllerNodeID, TargetID: "health-center"},
+				{ID: "connection:controller:telecom-network", SourceID: domain.ControllerNodeID, TargetID: "telecom-network"},
+				{ID: "connection:controller:drinking-water", SourceID: domain.ControllerNodeID, TargetID: "drinking-water"},
+				{ID: "connection:controller:school-campus", SourceID: domain.ControllerNodeID, TargetID: "school-campus"},
+				{ID: "connection:controller:small-businesses", SourceID: domain.ControllerNodeID, TargetID: "small-businesses"},
+				{ID: "connection:controller:households", SourceID: domain.ControllerNodeID, TargetID: "households"},
+				{ID: "connection:controller:street-lighting", SourceID: domain.ControllerNodeID, TargetID: "street-lighting"},
+				{ID: "connection:controller:food-cold-storage", SourceID: domain.ControllerNodeID, TargetID: "food-cold-storage"},
 			},
 		},
 		Horizon: domain.PlanningHorizon{StartsAt: startsAt, IntervalMinutes: 15, IntervalCount: 96},

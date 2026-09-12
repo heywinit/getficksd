@@ -108,14 +108,14 @@
     ],
     "connections": [
       {
-        "id": "connection:spiti-solar:controller",
+        "id": "connection:spiti-solar:spiti-battery",
         "source_id": "spiti-solar",
-        "target_id": "controller"
+        "target_id": "spiti-battery"
       },
       {
-        "id": "connection:spiti-wind:controller",
+        "id": "connection:spiti-wind:spiti-battery",
         "source_id": "spiti-wind",
-        "target_id": "controller"
+        "target_id": "spiti-battery"
       },
       {
         "id": "connection:spiti-battery:controller",

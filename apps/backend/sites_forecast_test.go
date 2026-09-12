@@ -23,11 +23,18 @@ func TestSiteEndpointsUsePersistedScenario(t *testing.T) {
 	if err := json.NewDecoder(listResponse.Body).Decode(&sites); err != nil {
 		t.Fatalf("decode sites: %v", err)
 	}
-	if len(sites) != 1 || sites[0].ID != "spiti-valley" || sites[0].Capacity.SolarKW != 220 {
+	if len(sites) != len(demoOperators) {
 		t.Fatalf("unexpected sites: %#v", sites)
 	}
-	if sites[0].CommitmentCount != 7 || sites[0].LatestRun != nil {
-		t.Fatalf("unexpected site counts: %#v", sites[0])
+	var spiti *siteSummary
+	for index := range sites {
+		if sites[index].ID == "spiti-valley" {
+			spiti = &sites[index]
+			break
+		}
+	}
+	if spiti == nil || spiti.Capacity.SolarKW != 220 || spiti.CommitmentCount != 7 || spiti.LatestRun != nil {
+		t.Fatalf("unexpected Spiti Valley summary: %#v", spiti)
 	}
 
 	detailResponse := httptest.NewRecorder()

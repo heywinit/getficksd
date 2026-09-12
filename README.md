@@ -4,7 +4,7 @@ Wattson uses TanStack Start for the web application and Go for the backend.
 
 The repository contains the clean application foundation and the first version of Wattson's energy domain. The optimizer will be added later.
 
-The demo uses four seeded operators. Each operator owns a different site, and the selected operator stays in local browser storage. Spiti Valley has the first validated 24-hour scenario.
+The demo uses four seeded operators. Each operator owns a complete, validated 24-hour community-grid scenario. The selected operator stays in local browser storage.
 
 ## Structure
 
@@ -51,7 +51,7 @@ Set `BACKEND_URL` to the private or public URL of the Go service.
 
 ## Scenario data
 
-The first seed lives at `apps/backend/seeddata/spiti-valley-default.json`. It contains the site, assets, services, contracts, signals, disruptions, and all 96 fifteen-minute values for one day.
+The seeds live in `apps/backend/seeddata`. They contain each site, its assets, services, contracts, signals, disruptions, and all 96 fifteen-minute values.
 
 Regenerate it after changing its source model:
 

@@ -43,7 +43,7 @@ Available endpoints:
 
 A Wattson run can reference a baseline through `parent_run_id`. Its response includes measured summary, contract, service, asset, and interval differences. Each run stores its scenario revision and a canonical SHA-256 scenario snapshot hash. A comparison requires both to match, so an edit cannot silently invalidate the result.
 
-The canonical domain types are in `internal/domain`. The checked-in Spiti Valley scenario models eight community services, seven commitments, three disruptions, and four physical assets. The backend inserts it only when it is absent. It does not overwrite user edits at startup.
+The canonical domain types are in `internal/domain`. Each checked-in community scenario models eight services, seven commitments, and three disruptions. The backend inserts each scenario only when it is absent. It does not overwrite user edits at startup.
 
 Scenario writes validate the complete scenario before the backend saves it. `POST /v1/scenarios` returns `409` for a duplicate ID. `PUT /v1/scenarios/{scenarioID}` replaces the full document, and its body ID must match the path. The signal, initial-state, and event routes return the full updated scenario.
 

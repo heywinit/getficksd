@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -95,27 +96,31 @@ func TestListDemoOperators(t *testing.T) {
 }
 
 func TestGetDemoScenario(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/v1/demo/sites/spiti-valley/scenario", nil)
-	response := httptest.NewRecorder()
+	application := testApp(t)
+	for _, operator := range demoOperators {
+		t.Run(operator.Site.ID, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/v1/demo/sites/"+operator.Site.ID+"/scenario", nil)
+			response := httptest.NewRecorder()
+			application.routes().ServeHTTP(response, request)
 
-	testApp(t).routes().ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", response.Code)
+			}
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", response.Code)
-	}
-
-	var scenario domain.Scenario
-	if err := json.NewDecoder(response.Body).Decode(&scenario); err != nil {
-		t.Fatalf("decode scenario response: %v", err)
-	}
-	if scenario.Site.ID != "spiti-valley" {
-		t.Fatalf("expected Spiti Valley, got %q", scenario.Site.ID)
-	}
-	if scenario.Horizon.IntervalCount != 96 {
-		t.Fatalf("expected 96 intervals, got %d", scenario.Horizon.IntervalCount)
-	}
-	if err := domain.ValidateScenario(scenario); err != nil {
-		t.Fatalf("API returned invalid scenario: %v", err)
+			var scenario domain.Scenario
+			if err := json.NewDecoder(response.Body).Decode(&scenario); err != nil {
+				t.Fatalf("decode scenario response: %v", err)
+			}
+			if scenario.Site.ID != operator.Site.ID {
+				t.Fatalf("expected site %q, got %q", operator.Site.ID, scenario.Site.ID)
+			}
+			if len(scenario.Site.Services) != 8 || len(scenario.Contracts) != 7 || len(scenario.Events) != 3 {
+				t.Fatalf("scenario is not a complete community seed: %#v", scenario)
+			}
+			if err := domain.ValidateScenario(scenario); err != nil {
+				t.Fatalf("API returned invalid scenario: %v", err)
+			}
+		})
 	}
 }
 
@@ -141,11 +146,13 @@ func TestListScenarios(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&scenarios); err != nil {
 		t.Fatalf("decode scenarios: %v", err)
 	}
-	if len(scenarios) != 1 || scenarios[0].ID != "spiti-valley-community-v2" {
+	if len(scenarios) != len(demoOperators) {
 		t.Fatalf("unexpected scenarios: %#v", scenarios)
 	}
-	if scenarios[0].Revision != 1 || scenarios[0].ContractCount != 7 || scenarios[0].EventCount != 3 {
-		t.Fatalf("unexpected scenario summary: %#v", scenarios[0])
+	for _, scenario := range scenarios {
+		if scenario.Revision != 1 || scenario.ContractCount != 7 || scenario.EventCount != 3 {
+			t.Fatalf("unexpected scenario summary: %#v", scenario)
+		}
 	}
 }
 
@@ -557,6 +564,59 @@ func TestDemoSeedPreservesScenarioEdits(t *testing.T) {
 	}
 	if reloaded.Name != "Operator edited scenario" {
 		t.Fatalf("seed overwrote operator edit: %#v", reloaded)
+	}
+}
+
+func TestDemoSeedUpgradesLegacySpitiScenario(t *testing.T) {
+	ctx := context.Background()
+	connection, err := database.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(func() { connection.Close() })
+	store := database.NewStore(connection)
+
+	legacyDocument, err := json.Marshal(demoScenarios["spiti-valley"])
+	if err != nil {
+		t.Fatalf("encode legacy scenario: %v", err)
+	}
+	var legacy domain.Scenario
+	if err := json.Unmarshal(legacyDocument, &legacy); err != nil {
+		t.Fatalf("decode legacy scenario: %v", err)
+	}
+	legacy.ID = legacySpitiScenarioID
+	legacy.Revision = 7
+	legacy.Site.Services[0].ID = "clinic-cold-chain"
+	legacy.Site.Connections = nil
+	for index := range legacy.Signals {
+		if legacy.Signals[index].ServiceID == "health-center" {
+			legacy.Signals[index].ServiceID = "clinic-cold-chain"
+		}
+	}
+	for index := range legacy.Contracts {
+		if legacy.Contracts[index].ServiceID == "health-center" {
+			legacy.Contracts[index].ServiceID = "clinic-cold-chain"
+		}
+	}
+	if err := store.CreateScenario(ctx, legacy); err != nil {
+		t.Fatalf("create legacy scenario: %v", err)
+	}
+
+	if err := seedDemoScenarios(ctx, store); err != nil {
+		t.Fatalf("upgrade legacy scenario: %v", err)
+	}
+	upgraded, err := store.Scenario(ctx, legacySpitiScenarioID)
+	if err != nil {
+		t.Fatalf("load upgraded scenario: %v", err)
+	}
+	if upgraded.Revision != 8 || len(upgraded.Site.Services) != 8 || len(upgraded.Contracts) != 7 {
+		t.Fatalf("legacy scenario did not receive the community model: %#v", upgraded)
+	}
+	if upgraded.Site.Services[0].ID != "health-center" {
+		t.Fatalf("legacy service cards remain after upgrade: %#v", upgraded.Site.Services)
+	}
+	if _, err := store.Scenario(ctx, "spiti-valley-community-v2"); !errors.Is(err, database.ErrNotFound) {
+		t.Fatalf("upgrade created a duplicate scenario: %v", err)
 	}
 }
 

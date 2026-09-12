@@ -392,6 +392,13 @@ func writeScenarioReplaceError(response http.ResponseWriter, err error) {
 
 func seedDemoScenarios(ctx context.Context, store *database.Store) error {
 	for _, scenario := range demoScenarios {
+		upgraded, err := upgradeLegacySpitiScenario(ctx, store, scenario)
+		if err != nil {
+			return err
+		}
+		if upgraded {
+			continue
+		}
 		deleted, err := store.ScenarioWasDeleted(ctx, scenario.ID)
 		if err != nil {
 			return err
@@ -404,4 +411,51 @@ func seedDemoScenarios(ctx context.Context, store *database.Store) error {
 		}
 	}
 	return nil
+}
+
+const legacySpitiScenarioID = "spiti-valley-default"
+
+func upgradeLegacySpitiScenario(
+	ctx context.Context,
+	store *database.Store,
+	seed domain.Scenario,
+) (bool, error) {
+	if seed.Site.ID != "spiti-valley" {
+		return false, nil
+	}
+	legacy, err := store.Scenario(ctx, legacySpitiScenarioID)
+	if errors.Is(err, database.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !isLegacySpitiScenario(legacy) {
+		return false, nil
+	}
+
+	replacement := seed
+	replacement.ID = legacy.ID
+	replacement.Revision = legacy.Revision + 1
+	if err := store.ReplaceScenario(ctx, replacement); err != nil {
+		return false, fmt.Errorf("upgrade legacy Spiti Valley scenario: %w", err)
+	}
+	return true, nil
+}
+
+func isLegacySpitiScenario(scenario domain.Scenario) bool {
+	if scenario.ID != legacySpitiScenarioID || scenario.Site.ID != "spiti-valley" {
+		return false
+	}
+	legacyServices := map[string]struct{}{
+		"clinic-cold-chain": {},
+		"water-supply":      {},
+		"flexible-homes":    {},
+	}
+	for _, service := range scenario.Site.Services {
+		if _, exists := legacyServices[service.ID]; exists {
+			return true
+		}
+	}
+	return false
 }
