@@ -1,0 +1,107 @@
+package database
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/heywinit/wattson/backend/internal/domain"
+)
+
+func TestMigrationsAndStoreRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "wattson.db")
+	connection, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	var migrationCount int
+	if err := connection.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
+		t.Fatalf("read migration count: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("expected one applied migration, got %d", migrationCount)
+	}
+
+	store := NewStore(connection)
+	scenario := loadScenario(t)
+	if err := store.SaveScenario(ctx, scenario); err != nil {
+		t.Fatalf("save scenario: %v", err)
+	}
+	loadedScenario, err := store.Scenario(ctx, scenario.ID)
+	if err != nil {
+		t.Fatalf("load scenario: %v", err)
+	}
+	if loadedScenario.Site.ID != scenario.Site.ID || len(loadedScenario.Signals) != len(scenario.Signals) {
+		t.Fatalf("stored scenario changed: %#v", loadedScenario)
+	}
+
+	run := domain.PlanRun{
+		ID: "run-one", ScenarioID: scenario.ID, Planner: domain.PlannerWattson,
+		Status: domain.PlanComplete, CreatedAt: time.Date(2026, 9, 12, 7, 0, 0, 0, time.UTC),
+		ActiveEventIDs: []string{"midday-solar-shortfall"}, Intervals: []domain.PlanInterval{},
+		ContractOutcomes: []domain.ContractOutcome{}, Decisions: []domain.Decision{},
+	}
+	if err := store.SavePlanRun(ctx, run, ""); err != nil {
+		t.Fatalf("save plan run: %v", err)
+	}
+	loadedRun, err := store.PlanRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("load plan run: %v", err)
+	}
+	if loadedRun.ID != run.ID || len(loadedRun.ActiveEventIDs) != 1 {
+		t.Fatalf("stored plan run changed: %#v", loadedRun)
+	}
+	runs, err := store.PlanRuns(ctx, scenario.ID, 20, 0)
+	if err != nil {
+		t.Fatalf("list plan runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("unexpected plan run list: %#v", runs)
+	}
+
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+	connection, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen migrated database: %v", err)
+	}
+	t.Cleanup(func() { connection.Close() })
+	if err := connection.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
+		t.Fatalf("read migration count after reopen: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("migration was applied more than once: %d", migrationCount)
+	}
+}
+
+func TestStoreReturnsNotFound(t *testing.T) {
+	connection, err := Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { connection.Close() })
+	_, err = NewStore(connection).Scenario(context.Background(), "missing")
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func loadScenario(t *testing.T) domain.Scenario {
+	t.Helper()
+	contents, err := os.ReadFile("../../seeddata/spiti-valley-default.json")
+	if err != nil {
+		t.Fatalf("read scenario: %v", err)
+	}
+	var scenario domain.Scenario
+	if err := json.Unmarshal(contents, &scenario); err != nil {
+		t.Fatalf("decode scenario: %v", err)
+	}
+	return scenario
+}

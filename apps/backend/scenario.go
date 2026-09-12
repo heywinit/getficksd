@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
+	"github.com/heywinit/wattson/backend/internal/database"
 	"github.com/heywinit/wattson/backend/internal/domain"
 )
 
@@ -49,13 +52,39 @@ func mustLoadDemoScenarios() map[string]domain.Scenario {
 
 func (a *app) getDemoScenario(response http.ResponseWriter, request *http.Request) {
 	siteID := request.PathValue("siteID")
-	scenario, exists := demoScenarios[siteID]
-	if !exists {
+	scenario, err := a.store.ScenarioBySite(request.Context(), siteID)
+	if errors.Is(err, database.ErrNotFound) {
 		writeJSON(response, http.StatusNotFound, map[string]string{
 			"message": "No seeded scenario exists for this site.",
 		})
 		return
 	}
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenario could not be loaded."})
+		return
+	}
 
 	writeJSON(response, http.StatusOK, scenario)
+}
+
+func (a *app) getScenario(response http.ResponseWriter, request *http.Request) {
+	scenario, err := a.store.Scenario(request.Context(), request.PathValue("scenarioID"))
+	if errors.Is(err, database.ErrNotFound) {
+		writeJSON(response, http.StatusNotFound, map[string]string{"message": "The scenario does not exist."})
+		return
+	}
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenario could not be loaded."})
+		return
+	}
+	writeJSON(response, http.StatusOK, scenario)
+}
+
+func seedDemoScenarios(ctx context.Context, store *database.Store) error {
+	for _, scenario := range demoScenarios {
+		if err := store.SaveScenario(ctx, scenario); err != nil {
+			return err
+		}
+	}
+	return nil
 }

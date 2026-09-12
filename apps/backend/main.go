@@ -12,17 +12,23 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/heywinit/wattson/backend/internal/database"
+	"github.com/heywinit/wattson/backend/internal/scheduler"
 )
 
 const version = "0.1.0"
 
 type config struct {
 	port           string
+	databasePath   string
 	allowedOrigins map[string]struct{}
 }
 
 type app struct {
-	config config
+	config    config
+	store     *database.Store
+	scheduler *scheduler.Scheduler
 }
 
 type healthResponse struct {
@@ -39,14 +45,24 @@ type streamEvent struct {
 
 func main() {
 	cfg := loadConfig()
-	server := &http.Server{
-		Addr:              ":" + cfg.port,
-		Handler:           newApp(cfg).routes(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	databaseConnection, err := database.Open(ctx, cfg.databasePath)
+	if err != nil {
+		log.Fatalf("Database startup failed: %v", err)
+	}
+	defer databaseConnection.Close()
+	store := database.NewStore(databaseConnection)
+	if err := seedDemoScenarios(ctx, store); err != nil {
+		log.Fatalf("Scenario seed failed: %v", err)
+	}
+
+	server := &http.Server{
+		Addr:              ":" + cfg.port,
+		Handler:           newApp(cfg, store, scheduler.New()).routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	errorsChannel := make(chan error, 1)
 	go func() {
@@ -78,6 +94,10 @@ func loadConfig() config {
 	if origins == "" {
 		origins = "http://localhost:3001"
 	}
+	databasePath := strings.TrimSpace(os.Getenv("DATABASE_PATH"))
+	if databasePath == "" {
+		databasePath = "local.db"
+	}
 
 	allowedOrigins := make(map[string]struct{})
 	for origin := range strings.SplitSeq(origins, ",") {
@@ -87,11 +107,11 @@ func loadConfig() config {
 		}
 	}
 
-	return config{port: port, allowedOrigins: allowedOrigins}
+	return config{port: port, databasePath: databasePath, allowedOrigins: allowedOrigins}
 }
 
-func newApp(cfg config) *app {
-	return &app{config: cfg}
+func newApp(cfg config, store *database.Store, planner *scheduler.Scheduler) *app {
+	return &app{config: cfg, store: store, scheduler: planner}
 }
 
 func (a *app) routes() http.Handler {
@@ -99,6 +119,10 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /health", a.health)
 	mux.HandleFunc("GET /v1/demo/operators", a.listDemoOperators)
 	mux.HandleFunc("GET /v1/demo/sites/{siteID}/scenario", a.getDemoScenario)
+	mux.HandleFunc("GET /v1/scenarios/{scenarioID}", a.getScenario)
+	mux.HandleFunc("POST /v1/plan-runs", a.createPlanRun)
+	mux.HandleFunc("GET /v1/plan-runs/{runID}", a.getPlanRun)
+	mux.HandleFunc("GET /v1/scenarios/{scenarioID}/plan-runs", a.listPlanRuns)
 	mux.HandleFunc("GET /v1/events", a.events)
 
 	return a.cors(mux)
@@ -157,7 +181,7 @@ func (a *app) cors(next http.Handler) http.Handler {
 		if _, allowed := a.config.allowedOrigins[origin]; allowed {
 			response.Header().Set("Access-Control-Allow-Origin", origin)
 			response.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type")
-			response.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			response.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			response.Header().Add("Vary", "Origin")
 		}
 
