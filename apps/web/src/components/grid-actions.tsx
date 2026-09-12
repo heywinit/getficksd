@@ -20,7 +20,6 @@ import { Input } from "@getficksd/ui/components/input";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryChargingIcon,
-  FileWarningIcon,
   FuelIcon,
   HomeIcon,
   LoaderCircleIcon,
@@ -70,7 +69,6 @@ const addItems = [
     icon: ScrollTextIcon,
     group: "Rules",
   },
-  { kind: "event", label: "Disruption", icon: FileWarningIcon, group: "Rules" },
 ] as const;
 
 export function GridActions({
@@ -169,8 +167,7 @@ export function GridActions({
                     const Icon = item.icon;
                     const itemDisabled =
                       disabled ||
-                      (item.kind === "contract" && scenario?.site.services.length === 0) ||
-                      (item.kind === "event" && scenario?.signals.length === 0);
+                      (item.kind === "contract" && scenario?.site.services.length === 0);
                     return (
                       <DropdownMenuItem
                         key={item.kind}

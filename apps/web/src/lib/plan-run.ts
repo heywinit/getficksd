@@ -102,8 +102,9 @@ export type Scenario = {
   events: Array<{
     id: string;
     name: string;
-    type: "renewable_shortfall" | "fuel_delivery_delay" | "demand_surge";
-    signal_id: string;
+    type: "asset_outage" | "renewable_shortfall" | "fuel_delivery_delay" | "demand_surge";
+    signal_id?: string;
+    asset_id?: string;
     start?: string;
     end?: string;
     availability_multiplier?: number;

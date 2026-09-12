@@ -124,6 +124,22 @@ function HomeComponent() {
     },
     onError: (error) => toast.error(error.message),
   });
+  const disruptionMutation = useMutation({
+    mutationFn: (next: Scenario) => updateScenario(next),
+    onSuccess: (savedScenario) => {
+      queryClient.setQueryData(["scenario", savedScenario.id], savedScenario);
+      queryClient.setQueryData(["plan-runs", savedScenario.id], []);
+      queryClient.removeQueries({ queryKey: ["plan-run"] });
+      void queryClient.invalidateQueries({ queryKey: ["scenarios"] });
+      void queryClient.invalidateQueries({ queryKey: ["site", siteId] });
+      void queryClient.invalidateQueries({ queryKey: ["sites"] });
+      setIsPlaying(false);
+      setReplayToken(0);
+      setCurrentHour(0);
+      toast.success("Disruption saved. Create a new plan before operation.");
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const connectionMutation = useMutation({
     mutationFn: async (connections: GridConnection[]) => {
       const scenario = scenarioQuery.data;
@@ -295,6 +311,8 @@ function HomeComponent() {
               setIsPlaying(true);
             }}
             onDeleteScenario={(scenarioID) => scenarioDeleteMutation.mutateAsync(scenarioID)}
+            onUpdateScenario={(next) => disruptionMutation.mutateAsync(next)}
+            isUpdatingScenario={disruptionMutation.isPending}
           />
           <PlanBrief
             scenario={scenarioQuery.data}
@@ -389,7 +407,10 @@ function removeResource(scenario: Scenario, target: CanvasResourceTarget) {
       (state) => state.asset_id !== target.id,
     );
     scenario.signals = scenario.signals.filter((signal) => signal.asset_id !== target.id);
-    scenario.events = scenario.events.filter((event) => !signalIds.has(event.signal_id));
+    scenario.events = scenario.events.filter(
+      (event) =>
+        event.asset_id !== target.id && (!event.signal_id || !signalIds.has(event.signal_id)),
+    );
     const remainingBatteries = scenario.site.assets.filter((asset) => asset.type === "battery");
     const remainingCapacity = remainingBatteries.reduce(
       (total, asset) => total + (asset.capacity_kwh ?? 0),
@@ -424,7 +445,9 @@ function removeResource(scenario: Scenario, target: CanvasResourceTarget) {
   );
   scenario.signals = scenario.signals.filter((signal) => signal.service_id !== target.id);
   scenario.contracts = remainingContracts;
-  scenario.events = scenario.events.filter((event) => !signalIds.has(event.signal_id));
+  scenario.events = scenario.events.filter(
+    (event) => !event.signal_id || !signalIds.has(event.signal_id),
+  );
 }
 
 type GridConfigurationIssue = { title: string; detail: string };
