@@ -1,0 +1,9 @@
+{
+  "name": "wattson-backend",
+  "private": true,
+  "scripts": {
+    "build": "GOCACHE=/tmp/wattson-go-cache go build -o /tmp/wattson-backend-build .",
+    "check-types": "GOCACHE=/tmp/wattson-go-cache go test ./...",
+    "dev": "go run ."
+  }
+}

@@ -1,0 +1,415 @@
+openapi: 3.1.0
+info:
+  title: Wattson Backend API
+  version: 0.1.0
+  description: The small contract between the Wattson web app and planning service.
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: The backend is available.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /v1/events:
+    get:
+      operationId: streamEvents
+      responses:
+        "200":
+          description: A basic server-sent event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/demo/operators:
+    get:
+      operationId: listDemoOperators
+      responses:
+        "200":
+          description: The seeded operators and their site summaries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DemoOperator"
+  /v1/demo/sites/{site_id}/scenario:
+    get:
+      operationId: getDemoScenario
+      parameters:
+        - name: site_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The site's validated 24-hour planning scenario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "404":
+          description: The site does not have a seeded scenario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [service, status, version]
+      properties:
+        service: { type: string }
+        status: { type: string, const: ok }
+        version: { type: string }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message: { type: string }
+    DemoOperator:
+      type: object
+      additionalProperties: false
+      required: [id, name, role, site]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string }
+        site:
+          $ref: "#/components/schemas/DemoSiteSummary"
+    DemoSiteSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - location
+        - timezone
+        - peak_demand_kw
+        - solar_capacity_kw
+        - wind_capacity_kw
+        - battery_capacity_kwh
+        - diesel_capacity_kw
+      properties:
+        id: { type: string }
+        name: { type: string }
+        location: { type: string }
+        timezone: { type: string }
+        peak_demand_kw: { type: number }
+        solar_capacity_kw: { type: number }
+        wind_capacity_kw: { type: number }
+        battery_capacity_kwh: { type: number }
+        diesel_capacity_kw: { type: number }
+    Scenario:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - id
+        - name
+        - description
+        - site
+        - horizon
+        - initial_state
+        - signals
+        - contracts
+        - events
+        - operating_policy
+      properties:
+        schema_version: { type: string, const: "1" }
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        site:
+          $ref: "#/components/schemas/Site"
+        horizon:
+          $ref: "#/components/schemas/PlanningHorizon"
+        initial_state:
+          $ref: "#/components/schemas/InitialState"
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Signal"
+        contracts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contract"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScenarioEvent"
+        operating_policy:
+          $ref: "#/components/schemas/OperatingPolicy"
+    Site:
+      type: object
+      additionalProperties: false
+      required: [id, name, location, timezone, currency, assets, services]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        location: { type: string }
+        timezone: { type: string }
+        currency: { type: string }
+        assets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Asset"
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/Service"
+    Asset:
+      oneOf:
+        - $ref: "#/components/schemas/RenewableAsset"
+        - $ref: "#/components/schemas/BatteryAsset"
+        - $ref: "#/components/schemas/DieselAsset"
+      discriminator:
+        propertyName: type
+    RenewableAsset:
+      type: object
+      additionalProperties: false
+      required: [id, name, type, capacity_kw]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [solar, wind] }
+        capacity_kw: { type: number, exclusiveMinimum: 0 }
+    BatteryAsset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - type
+        - capacity_kwh
+        - minimum_stored_energy_kwh
+        - max_charge_kw
+        - max_discharge_kw
+        - charge_efficiency
+        - discharge_efficiency
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, const: battery }
+        capacity_kwh: { type: number, exclusiveMinimum: 0 }
+        minimum_stored_energy_kwh: { type: number, minimum: 0 }
+        max_charge_kw: { type: number, exclusiveMinimum: 0 }
+        max_discharge_kw: { type: number, exclusiveMinimum: 0 }
+        charge_efficiency: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        discharge_efficiency: { type: number, exclusiveMinimum: 0, maximum: 1 }
+    DieselAsset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - type
+        - minimum_output_kw
+        - maximum_output_kw
+        - liters_per_kwh
+        - fuel_cost_per_liter
+        - emissions_kg_co2_per_liter
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, const: diesel }
+        minimum_output_kw: { type: number, minimum: 0 }
+        maximum_output_kw: { type: number, exclusiveMinimum: 0 }
+        liters_per_kwh: { type: number, exclusiveMinimum: 0 }
+        fuel_cost_per_liter: { type: number, minimum: 0 }
+        emissions_kg_co2_per_liter: { type: number, exclusiveMinimum: 0 }
+    Service:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, control_mode, rated_power_kw]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        control_mode: { type: string, enum: [fixed, curtailable, shiftable] }
+        rated_power_kw: { type: number, exclusiveMinimum: 0 }
+    PlanningHorizon:
+      type: object
+      additionalProperties: false
+      required: [starts_at, interval_minutes, interval_count]
+      properties:
+        starts_at: { type: string, format: date-time }
+        interval_minutes: { type: integer, const: 15 }
+        interval_count: { type: integer, const: 96 }
+    InitialState:
+      type: object
+      additionalProperties: false
+      required: [assets]
+      properties:
+        assets:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetState"
+    AssetState:
+      oneOf:
+        - $ref: "#/components/schemas/BatteryState"
+        - $ref: "#/components/schemas/DieselState"
+      discriminator:
+        propertyName: type
+    BatteryState:
+      type: object
+      additionalProperties: false
+      required: [asset_id, type, stored_energy_kwh]
+      properties:
+        asset_id: { type: string }
+        type: { type: string, const: battery }
+        stored_energy_kwh: { type: number, minimum: 0 }
+    DieselState:
+      type: object
+      additionalProperties: false
+      required: [asset_id, type, fuel_available_liters, running]
+      properties:
+        asset_id: { type: string }
+        type: { type: string, const: diesel }
+        fuel_available_liters: { type: number, minimum: 0 }
+        running: { type: boolean }
+    Signal:
+      oneOf:
+        - $ref: "#/components/schemas/RenewableSignal"
+        - $ref: "#/components/schemas/ServiceDemandSignal"
+        - $ref: "#/components/schemas/FuelDeliverySignal"
+      discriminator:
+        propertyName: kind
+    RenewableSignal:
+      type: object
+      additionalProperties: false
+      required: [id, kind, asset_id, unit, values]
+      properties:
+        id: { type: string }
+        kind: { type: string, const: renewable_availability }
+        asset_id: { type: string }
+        unit: { type: string, const: kW }
+        values:
+          $ref: "#/components/schemas/IntervalValues"
+    ServiceDemandSignal:
+      type: object
+      additionalProperties: false
+      required: [id, kind, service_id, unit, values]
+      properties:
+        id: { type: string }
+        kind: { type: string, const: service_demand }
+        service_id: { type: string }
+        unit: { type: string, const: kW }
+        values:
+          $ref: "#/components/schemas/IntervalValues"
+    FuelDeliverySignal:
+      type: object
+      additionalProperties: false
+      required: [id, kind, asset_id, unit, values]
+      properties:
+        id: { type: string }
+        kind: { type: string, const: fuel_delivery }
+        asset_id: { type: string }
+        unit: { type: string, const: liters }
+        values:
+          $ref: "#/components/schemas/IntervalValues"
+    IntervalValues:
+      type: array
+      minItems: 96
+      maxItems: 96
+      items: { type: number, minimum: 0 }
+    Contract:
+      oneOf:
+        - $ref: "#/components/schemas/ContinuousPowerContract"
+        - $ref: "#/components/schemas/RuntimeByDeadlineContract"
+        - $ref: "#/components/schemas/EnergyByDeadlineContract"
+      discriminator:
+        propertyName: kind
+    ContractBase:
+      type: object
+      required: [id, name, service_id, kind, priority, window_start, deadline]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        service_id: { type: string }
+        kind: { type: string }
+        priority: { type: string, enum: [critical, essential, flexible] }
+        window_start: { type: string, format: date-time }
+        deadline: { type: string, format: date-time }
+    ContinuousPowerContract:
+      allOf:
+        - $ref: "#/components/schemas/ContractBase"
+        - type: object
+          required: [minimum_power_kw]
+          properties:
+            kind: { type: string, const: continuous_power }
+            minimum_power_kw: { type: number, exclusiveMinimum: 0 }
+    RuntimeByDeadlineContract:
+      allOf:
+        - $ref: "#/components/schemas/ContractBase"
+        - type: object
+          required: [required_runtime_minutes]
+          properties:
+            kind: { type: string, const: runtime_by_deadline }
+            required_runtime_minutes: { type: integer, exclusiveMinimum: 0 }
+    EnergyByDeadlineContract:
+      allOf:
+        - $ref: "#/components/schemas/ContractBase"
+        - type: object
+          required: [required_energy_kwh]
+          properties:
+            kind: { type: string, const: energy_by_deadline }
+            required_energy_kwh: { type: number, exclusiveMinimum: 0 }
+    ScenarioEvent:
+      oneOf:
+        - $ref: "#/components/schemas/RenewableShortfallEvent"
+        - $ref: "#/components/schemas/DemandSurgeEvent"
+        - $ref: "#/components/schemas/FuelDeliveryDelayEvent"
+      discriminator:
+        propertyName: type
+    EventBase:
+      type: object
+      required: [id, name, type, signal_id]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        signal_id: { type: string }
+    RenewableShortfallEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [start, end, availability_multiplier]
+          properties:
+            type: { type: string, const: renewable_shortfall }
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time }
+            availability_multiplier: { type: number, minimum: 0, maximum: 1 }
+    DemandSurgeEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [start, end, demand_multiplier]
+          properties:
+            type: { type: string, const: demand_surge }
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time }
+            demand_multiplier: { type: number, minimum: 1 }
+    FuelDeliveryDelayEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [scheduled_at, delayed_until]
+          properties:
+            type: { type: string, const: fuel_delivery_delay }
+            scheduled_at: { type: string, format: date-time }
+            delayed_until: { type: string, format: date-time }
+    OperatingPolicy:
+      type: object
+      additionalProperties: false
+      required: [reserve_energy_kwh, assumed_loss_percent]
+      properties:
+        reserve_energy_kwh: { type: number, minimum: 0 }
+        assumed_loss_percent: { type: number, minimum: 0, exclusiveMaximum: 1 }
