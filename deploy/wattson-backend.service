@@ -1,0 +1,18 @@
+[Unit]
+Description=Wattson Go backend
+After=network.target
+
+[Service]
+Type=simple
+User=wattson
+Group=wattson
+WorkingDirectory=/opt/wattson/backend
+EnvironmentFile=/etc/wattson/backend.env
+ExecStart=/opt/wattson/backend/wattson-backend
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
