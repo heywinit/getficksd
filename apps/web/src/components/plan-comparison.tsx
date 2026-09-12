@@ -8,6 +8,7 @@ import {
   ShieldCheckIcon,
   SunIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { PlanComparison, PlanRun, Scenario } from "@/lib/plan-run";
 
@@ -118,8 +119,10 @@ export function PlanComparisonPanel({ scenario, run }: { scenario?: Scenario; ru
               >
                 {formatDelta(metric.delta)}
               </p>
-              <p className="mt-0.5 text-[10px] text-muted-foreground">
-                {item.unit} · {formatNumber(metric.baseline)} → {formatNumber(metric.candidate)}
+              <p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                <span>{item.unit} · {formatNumber(metric.baseline)}</span>
+                <ArrowRightIcon className="size-2.5 shrink-0" aria-hidden="true" />
+                <span>{formatNumber(metric.candidate)}</span>
               </p>
             </article>
           );
@@ -135,7 +138,13 @@ export function PlanComparisonPanel({ scenario, run }: { scenario?: Scenario; ru
             name:
               scenario.contracts.find((candidate) => candidate.id === contract.contract_id)?.name ??
               contract.contract_id,
-            detail: `${contract.baseline_status ?? "absent"} → ${contract.candidate_status ?? "absent"}`,
+            detail: (
+              <span className="flex items-center gap-1">
+                <span>{contract.baseline_status ?? "absent"}</span>
+                <ArrowRightIcon className="size-2.5 shrink-0" aria-hidden="true" />
+                <span>{contract.candidate_status ?? "absent"}</span>
+              </span>
+            ),
             value: `${formatDelta(contract.shortfall.delta)} shortfall`,
             tone: deltaTone(contract.shortfall.delta, "lower"),
           }))}
@@ -176,7 +185,7 @@ function ComparisonList({
 }: {
   title: string;
   empty: string;
-  items: Array<{ id: string; name: string; detail: string; value: string; tone: string }>;
+  items: Array<{ id: string; name: string; detail: ReactNode; value: string; tone: string }>;
 }) {
   return (
     <article className="min-h-40 rounded-xl border border-border bg-card p-3">
