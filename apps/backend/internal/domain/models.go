@@ -143,13 +143,15 @@ const (
 	EventRenewableShortfall EventType = "renewable_shortfall"
 	EventFuelDeliveryDelay  EventType = "fuel_delivery_delay"
 	EventDemandSurge        EventType = "demand_surge"
+	EventAssetOutage        EventType = "asset_outage"
 )
 
 type ScenarioEvent struct {
 	ID                     string     `json:"id"`
 	Name                   string     `json:"name"`
 	Type                   EventType  `json:"type"`
-	SignalID               string     `json:"signal_id"`
+	SignalID               string     `json:"signal_id,omitempty"`
+	AssetID                string     `json:"asset_id,omitempty"`
 	Start                  *time.Time `json:"start,omitempty"`
 	End                    *time.Time `json:"end,omitempty"`
 	AvailabilityMultiplier *float64   `json:"availability_multiplier,omitempty"`
@@ -301,6 +303,16 @@ type PlanSummary struct {
 	MinimumBatteryEnergyKWH float64 `json:"minimum_battery_energy_kwh"`
 }
 
+type OptimizationInfo struct {
+	Engine         string  `json:"engine"`
+	Termination    string  `json:"termination"`
+	ObjectiveValue float64 `json:"objective_value"`
+	MIPGap         float64 `json:"mip_gap"`
+	SolveMS        int64   `json:"solve_ms"`
+	UsedFallback   bool    `json:"used_fallback"`
+	FallbackReason string  `json:"fallback_reason,omitempty"`
+}
+
 type PlanRun struct {
 	ID               string            `json:"id"`
 	ScenarioID       string            `json:"scenario_id"`
@@ -315,6 +327,7 @@ type PlanRun struct {
 	ContractOutcomes []ContractOutcome `json:"contract_outcomes"`
 	Decisions        []Decision        `json:"decisions"`
 	Summary          PlanSummary       `json:"summary"`
+	Optimization     *OptimizationInfo `json:"optimization,omitempty"`
 }
 
 type ForecastCacheStatus string

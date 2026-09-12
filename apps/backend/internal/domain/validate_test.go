@@ -42,7 +42,7 @@ func TestValidateScenarioRejectsSignalWithMissingIntervals(t *testing.T) {
 	scenario := validScenario()
 	scenario.Signals[0].Values = scenario.Signals[0].Values[:95]
 
-	assertValidationError(t, scenario, "must contain 96 values")
+	assertValidationError(t, scenario, `The forecast for "Solar" must contain 96 intervals`)
 }
 
 func TestValidateScenarioRejectsSignalWithUnknownAsset(t *testing.T) {
@@ -73,7 +73,22 @@ func TestValidateScenarioRejectsRenewableOutputAboveCapacity(t *testing.T) {
 	scenario := validScenario()
 	scenario.Signals[0].Values[20] = 51
 
-	assertValidationError(t, scenario, "exceeds asset capacity")
+	assertValidationError(t, scenario, `The forecast for "Solar" exceeds the 50 kW installed capacity at interval 21`)
+}
+
+func TestValidateScenarioSummarizesRepeatedSignalValueErrors(t *testing.T) {
+	scenario := validScenario()
+	for index := range scenario.Signals[0].Values {
+		scenario.Signals[0].Values[index] = 51
+	}
+
+	err := ValidateScenario(scenario)
+	if err == nil {
+		t.Fatal("expected a validation error")
+	}
+	if got, want := err.Error(), `The forecast for "Solar" exceeds the 50 kW installed capacity in 96 intervals`; got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
 }
 
 func TestValidateScenarioRejectsBatteryStateOutsideBounds(t *testing.T) {
@@ -183,6 +198,115 @@ func TestValidateScenarioRejectsInvalidGeneratorDynamics(t *testing.T) {
 			scenario := validScenario()
 			test.change(&scenario.Site.Assets[2])
 			assertValidationError(t, scenario, test.expected)
+		})
+	}
+}
+
+func TestValidateScenarioAcceptsAssetOutagesForDispatchAssets(t *testing.T) {
+	scenario := validScenario()
+	windCapacity := 20.0
+	scenario.Site.Assets = append(scenario.Site.Assets, Asset{ID: "wind", Name: "Wind", Type: AssetWind, CapacityKW: &windCapacity})
+	start := scenario.Horizon.StartsAt.Add(time.Hour)
+	end := start.Add(time.Hour)
+	multiplier := 0.25
+
+	for _, assetID := range []string{"solar", "wind", "battery", "diesel"} {
+		t.Run(assetID, func(t *testing.T) {
+			candidate := scenario
+			candidate.Events = []ScenarioEvent{{
+				ID: "outage", Name: "Reduced capacity", Type: EventAssetOutage,
+				AssetID: assetID, Start: &start, End: &end, AvailabilityMultiplier: &multiplier,
+			}}
+			if err := ValidateScenario(candidate); err != nil {
+				t.Fatalf("expected a valid %s outage, got %v", assetID, err)
+			}
+		})
+	}
+}
+
+func TestValidateScenarioRejectsInvalidAssetOutage(t *testing.T) {
+	scenario := validScenario()
+	start := scenario.Horizon.StartsAt.Add(time.Hour)
+	end := start.Add(time.Hour)
+	multiplier := 0.5
+	base := ScenarioEvent{
+		ID: "outage", Name: "Reduced capacity", Type: EventAssetOutage,
+		AssetID: "battery", Start: &start, End: &end, AvailabilityMultiplier: &multiplier,
+	}
+
+	tests := []struct {
+		name     string
+		change   func(*ScenarioEvent)
+		expected string
+	}{
+		{name: "missing asset", change: func(event *ScenarioEvent) { event.AssetID = "" }, expected: "asset_id is required"},
+		{name: "unknown asset", change: func(event *ScenarioEvent) { event.AssetID = "missing" }, expected: "asset_id does not reference an asset"},
+		{name: "missing multiplier", change: func(event *ScenarioEvent) { event.AvailabilityMultiplier = nil }, expected: "availability_multiplier must be from 0 through 1"},
+		{name: "multiplier above one", change: func(event *ScenarioEvent) { value := 1.1; event.AvailabilityMultiplier = &value }, expected: "availability_multiplier must be from 0 through 1"},
+		{name: "window outside horizon", change: func(event *ScenarioEvent) { value := scenario.Horizon.StartsAt.Add(-time.Minute); event.Start = &value }, expected: "start must be inside the horizon"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := base
+			test.change(&event)
+			candidate := scenario
+			candidate.Events = []ScenarioEvent{event}
+			assertValidationError(t, candidate, test.expected)
+		})
+	}
+}
+
+func TestValidateScenarioRejectsInvalidFuelDelayTimes(t *testing.T) {
+	scenario := validScenario()
+	deliveries := repeatedValues(96, 0)
+	deliveries[4] = 20
+	scenario.Signals = append(scenario.Signals, Signal{
+		ID: "fuel-delivery", Kind: SignalFuelDelivery, AssetID: "diesel", Unit: "liters", Values: deliveries,
+	})
+	scheduled := scenario.Horizon.StartsAt.Add(time.Hour)
+	delayed := scenario.Horizon.StartsAt.Add(2 * time.Hour)
+	base := ScenarioEvent{
+		ID: "fuel-delay", Name: "Fuel delay", Type: EventFuelDeliveryDelay,
+		SignalID: "fuel-delivery", ScheduledAt: &scheduled, DelayedUntil: &delayed,
+	}
+
+	tests := []struct {
+		name     string
+		change   func(*ScenarioEvent)
+		expected string
+	}{
+		{
+			name: "zero scheduled delivery",
+			change: func(event *ScenarioEvent) {
+				value := scenario.Horizon.StartsAt.Add(75 * time.Minute)
+				event.ScheduledAt = &value
+			},
+			expected: "scheduled_at must reference a nonzero fuel delivery",
+		},
+		{
+			name: "unaligned delayed time",
+			change: func(event *ScenarioEvent) {
+				value := scenario.Horizon.StartsAt.Add(121 * time.Minute)
+				event.DelayedUntil = &value
+			},
+			expected: "delayed_until must align to an interval inside the horizon",
+		},
+		{
+			name: "delayed at horizon end",
+			change: func(event *ScenarioEvent) {
+				value := scenario.Horizon.EndsAt()
+				event.DelayedUntil = &value
+			},
+			expected: "delayed_until must align to an interval inside the horizon",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := base
+			test.change(&event)
+			candidate := scenario
+			candidate.Events = []ScenarioEvent{event}
+			assertValidationError(t, candidate, test.expected)
 		})
 	}
 }

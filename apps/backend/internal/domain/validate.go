@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -27,7 +28,7 @@ func ValidateScenario(scenario Scenario) error {
 	validation.validateInitialState(scenario.InitialState, assets)
 	signals := validation.validateSignals(scenario.Signals, scenario.Horizon.IntervalCount, assets, services)
 	validation.validateContracts(scenario.Contracts, scenario.Horizon, services)
-	validation.validateEvents(scenario.Events, scenario.Horizon, signals)
+	validation.validateEvents(scenario.Events, scenario.Horizon, signals, assets)
 	validation.validateOperatingPolicy(scenario.OperatingPolicy, assets)
 
 	return validation.err()
@@ -237,15 +238,20 @@ func (v *scenarioValidation) validateSignals(
 	signalByID := make(map[string]Signal, len(signals))
 	for index, signal := range signals {
 		path := fmt.Sprintf("signals[%d]", index)
+		label := signalValidationLabel(signal, assets, services)
 		v.require(signal.ID != "", path+" id is required")
 		if _, exists := signalByID[signal.ID]; signal.ID != "" && exists {
 			v.errors = append(v.errors, path+" id must be unique")
 		}
 		signalByID[signal.ID] = signal
-		v.require(len(signal.Values) == intervalCount, fmt.Sprintf("%s must contain %d values", path, intervalCount))
-		for valueIndex, value := range signal.Values {
-			v.require(isNonnegative(value), fmt.Sprintf("%s values[%d] must be nonnegative", path, valueIndex))
-		}
+		v.require(len(signal.Values) == intervalCount, fmt.Sprintf("%s must contain %d intervals", label, intervalCount))
+		v.requireValidValues(
+			label,
+			signal.Values,
+			isNonnegative,
+			"contains a value that is below zero or invalid",
+			"contains values that are below zero or invalid",
+		)
 
 		switch signal.Kind {
 		case SignalRenewableAvailability:
@@ -255,9 +261,13 @@ func (v *scenarioValidation) validateSignals(
 			v.require(signal.ServiceID == "", path+" service_id must be empty")
 			v.require(signal.Unit == "kW", path+" unit must be kW")
 			if asset.CapacityKW != nil {
-				for valueIndex, value := range signal.Values {
-					v.require(value <= *asset.CapacityKW+0.001, fmt.Sprintf("%s values[%d] exceeds asset capacity", path, valueIndex))
-				}
+				v.requireValidValues(
+					label,
+					signal.Values,
+					func(value float64) bool { return value <= *asset.CapacityKW+0.001 },
+					fmt.Sprintf("exceeds the %s kW installed capacity", formatValidationNumber(*asset.CapacityKW)),
+					fmt.Sprintf("exceeds the %s kW installed capacity", formatValidationNumber(*asset.CapacityKW)),
+				)
 			}
 		case SignalServiceDemand:
 			service, exists := services[signal.ServiceID]
@@ -265,9 +275,13 @@ func (v *scenarioValidation) validateSignals(
 			v.require(signal.AssetID == "", path+" asset_id must be empty")
 			v.require(signal.Unit == "kW", path+" unit must be kW")
 			if exists {
-				for valueIndex, value := range signal.Values {
-					v.require(value <= service.RatedPowerKW+0.001, fmt.Sprintf("%s values[%d] exceeds service rated power", path, valueIndex))
-				}
+				v.requireValidValues(
+					label,
+					signal.Values,
+					func(value float64) bool { return value <= service.RatedPowerKW+0.001 },
+					fmt.Sprintf("exceeds the %s kW rated power", formatValidationNumber(service.RatedPowerKW)),
+					fmt.Sprintf("exceeds the %s kW rated power", formatValidationNumber(service.RatedPowerKW)),
+				)
 			}
 		case SignalFuelDelivery:
 			asset, exists := assets[signal.AssetID]
@@ -281,6 +295,60 @@ func (v *scenarioValidation) validateSignals(
 	}
 
 	return signalByID
+}
+
+func signalValidationLabel(signal Signal, assets map[string]Asset, services map[string]Service) string {
+	switch signal.Kind {
+	case SignalRenewableAvailability:
+		if asset, exists := assets[signal.AssetID]; exists && asset.Name != "" {
+			return fmt.Sprintf("The forecast for %q", asset.Name)
+		}
+	case SignalServiceDemand:
+		if service, exists := services[signal.ServiceID]; exists && service.Name != "" {
+			return fmt.Sprintf("The demand forecast for %q", service.Name)
+		}
+	case SignalFuelDelivery:
+		if asset, exists := assets[signal.AssetID]; exists && asset.Name != "" {
+			return fmt.Sprintf("The fuel schedule for %q", asset.Name)
+		}
+	}
+	if signal.ID != "" {
+		return fmt.Sprintf("The data series %q", signal.ID)
+	}
+	return "The data series"
+}
+
+func formatValidationNumber(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func (v *scenarioValidation) requireValidValues(
+	path string,
+	values []float64,
+	valid func(float64) bool,
+	singularProblem string,
+	pluralProblem string,
+) {
+	invalidCount := 0
+	firstInvalidIndex := 0
+	for index, value := range values {
+		if valid(value) {
+			continue
+		}
+		if invalidCount == 0 {
+			firstInvalidIndex = index
+		}
+		invalidCount++
+	}
+
+	switch invalidCount {
+	case 0:
+		return
+	case 1:
+		v.errors = append(v.errors, fmt.Sprintf("%s %s at interval %d", path, singularProblem, firstInvalidIndex+1))
+	default:
+		v.errors = append(v.errors, fmt.Sprintf("%s %s in %d intervals", path, pluralProblem, invalidCount))
+	}
 }
 
 func (v *scenarioValidation) validateContracts(contracts []Contract, horizon PlanningHorizon, services map[string]Service) {
@@ -334,14 +402,12 @@ func (v *scenarioValidation) validateContracts(contracts []Contract, horizon Pla
 	}
 }
 
-func (v *scenarioValidation) validateEvents(events []ScenarioEvent, horizon PlanningHorizon, signals map[string]Signal) {
+func (v *scenarioValidation) validateEvents(events []ScenarioEvent, horizon PlanningHorizon, signals map[string]Signal, assets map[string]Asset) {
 	eventIDs := make(map[string]struct{}, len(events))
 	for index, event := range events {
 		path := fmt.Sprintf("events[%d]", index)
-		signal, signalExists := signals[event.SignalID]
 		v.require(event.ID != "", path+" id is required")
 		v.require(event.Name != "", path+" name is required")
-		v.require(signalExists, path+" signal_id does not reference a signal")
 		if _, exists := eventIDs[event.ID]; event.ID != "" && exists {
 			v.errors = append(v.errors, path+" id must be unique")
 		}
@@ -349,26 +415,57 @@ func (v *scenarioValidation) validateEvents(events []ScenarioEvent, horizon Plan
 
 		switch event.Type {
 		case EventRenewableShortfall:
+			signal, signalExists := signals[event.SignalID]
+			v.require(signalExists, path+" signal_id does not reference a signal")
 			v.require(signal.Kind == SignalRenewableAvailability, path+" signal must contain renewable availability")
 			v.validateEventWindow(path, event.Start, event.End, horizon)
 			v.require(multiplierPointer(event.AvailabilityMultiplier, false), path+" availability_multiplier must be from 0 through 1")
 		case EventDemandSurge:
+			signal, signalExists := signals[event.SignalID]
+			v.require(signalExists, path+" signal_id does not reference a signal")
 			v.require(signal.Kind == SignalServiceDemand, path+" signal must contain service demand")
 			v.validateEventWindow(path, event.Start, event.End, horizon)
 			v.require(multiplierPointer(event.DemandMultiplier, true), path+" demand_multiplier must be at least 1")
 		case EventFuelDeliveryDelay:
+			signal, signalExists := signals[event.SignalID]
+			v.require(signalExists, path+" signal_id does not reference a signal")
 			v.require(signal.Kind == SignalFuelDelivery, path+" signal must contain a fuel delivery")
 			v.require(event.ScheduledAt != nil, path+" scheduled_at is required")
 			v.require(event.DelayedUntil != nil, path+" delayed_until is required")
 			if event.ScheduledAt != nil && event.DelayedUntil != nil {
 				v.require(event.ScheduledAt.Before(*event.DelayedUntil), path+" scheduled_at must be before delayed_until")
-				v.require(!event.ScheduledAt.Before(horizon.StartsAt), path+" scheduled_at must be inside the horizon")
-				v.require(!event.DelayedUntil.After(horizon.EndsAt()), path+" delayed_until must be inside the horizon")
+				scheduledAligned := eventTimeIsAligned(*event.ScheduledAt, horizon)
+				delayedAligned := eventTimeIsAligned(*event.DelayedUntil, horizon)
+				v.require(scheduledAligned, path+" scheduled_at must align to an interval inside the horizon")
+				v.require(delayedAligned, path+" delayed_until must align to an interval inside the horizon")
+				if signalExists && scheduledAligned {
+					index := int(event.ScheduledAt.Sub(horizon.StartsAt) / (time.Duration(horizon.IntervalMinutes) * time.Minute))
+					v.require(index < len(signal.Values) && signal.Values[index] > 0, path+" scheduled_at must reference a nonzero fuel delivery")
+				}
 			}
+		case EventAssetOutage:
+			asset, assetExists := assets[event.AssetID]
+			v.require(event.AssetID != "", path+" asset_id is required")
+			v.require(assetExists, path+" asset_id does not reference an asset")
+			v.require(
+				assetExists && (asset.Type == AssetSolar || asset.Type == AssetWind || asset.Type == AssetBattery || asset.Type == AssetDiesel),
+				path+" asset must be solar, wind, battery, or diesel",
+			)
+			v.validateEventWindow(path, event.Start, event.End, horizon)
+			v.require(multiplierPointer(event.AvailabilityMultiplier, false), path+" availability_multiplier must be from 0 through 1")
 		default:
 			v.errors = append(v.errors, path+" type is invalid")
 		}
 	}
+}
+
+func eventTimeIsAligned(timestamp time.Time, horizon PlanningHorizon) bool {
+	interval := time.Duration(horizon.IntervalMinutes) * time.Minute
+	if interval <= 0 {
+		return false
+	}
+	offset := timestamp.Sub(horizon.StartsAt)
+	return offset >= 0 && timestamp.Before(horizon.EndsAt()) && offset%interval == 0
 }
 
 func (v *scenarioValidation) validateEventWindow(path string, start, end *time.Time, horizon PlanningHorizon) {

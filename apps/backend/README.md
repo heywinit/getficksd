@@ -60,6 +60,19 @@ sqlc generate
 - `PORT` sets the HTTP port.
 - `WEB_ORIGINS` contains a comma-separated list of allowed browser origins.
 - `DATABASE_PATH` sets the SQLite file path. Its default value is `local.db`.
+- `MILP_ENABLED=false` disables the Python optimizer and uses the deterministic scheduler.
+- `MILP_PYTHON_PATH` sets the optimizer Python executable. Its default value is `optimizer/.venv/bin/python`.
+- `MILP_SCRIPT_PATH` sets the optimizer entrypoint. Its default value is `optimizer/solve.py`.
+- `MILP_TIMEOUT` sets the process timeout. Its default value is `8s`.
+
+Install the optimizer environment:
+
+```bash
+cd optimizer
+uv sync --python 3.13
+```
+
+The `baseline` planner uses the deterministic scheduler. The `wattson` planner uses the MILP first and falls back if the solver fails verification.
 
 ## VPS build
 

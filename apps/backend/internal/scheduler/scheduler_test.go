@@ -90,6 +90,106 @@ func TestActiveEventsTransformTheirSignals(t *testing.T) {
 	}
 }
 
+func TestAssetOutageLimitsRenewableBatteryAndDieselDispatch(t *testing.T) {
+	tests := []struct {
+		name       string
+		assetID    string
+		multiplier float64
+		scenario   func() domain.Scenario
+		assert     func(*testing.T, domain.PlanInterval)
+	}{
+		{
+			name: "renewable", assetID: "solar", multiplier: 0,
+			scenario: func() domain.Scenario { return scarceSupplyScenario(5) },
+			assert: func(t *testing.T, interval domain.PlanInterval) {
+				if got := interval.Renewables[0].AvailableKW; got != 0 {
+					t.Fatalf("renewable availability = %.3f, want 0", got)
+				}
+			},
+		},
+		{
+			name: "battery discharge", assetID: "battery", multiplier: 0.25,
+			scenario: func() domain.Scenario {
+				scenario := scarceSupplyScenario(0)
+				capacity, minimum, limit, efficiency, stored := 10.0, 0.0, 4.0, 1.0, 10.0
+				scenario.Site.Assets = append(scenario.Site.Assets, domain.Asset{
+					ID: "battery", Name: "Battery", Type: domain.AssetBattery,
+					CapacityKWH: &capacity, MinimumStoredEnergyKWH: &minimum,
+					MaxChargeKW: &limit, MaxDischargeKW: &limit,
+					ChargeEfficiency: &efficiency, DischargeEfficiency: &efficiency,
+				})
+				scenario.InitialState.Assets = []domain.AssetState{{AssetID: "battery", Type: domain.AssetBattery, StoredEnergyKWH: &stored}}
+				return scenario
+			},
+			assert: func(t *testing.T, interval domain.PlanInterval) {
+				if got := interval.Batteries[0].DischargeKW; got > 1+epsilon {
+					t.Fatalf("battery discharge = %.3f kW, want at most 1 kW", got)
+				}
+			},
+		},
+		{
+			name: "diesel", assetID: "generator", multiplier: 0.25,
+			scenario: generatorScenario,
+			assert: func(t *testing.T, interval domain.PlanInterval) {
+				if got := interval.Generators[0].OutputKW; got > 0.5+epsilon {
+					t.Fatalf("diesel output = %.3f kW, want at most 0.5 kW", got)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scenario := test.scenario()
+			start := scenario.Horizon.StartsAt
+			end := start.Add(15 * time.Minute)
+			scenario.Events = []domain.ScenarioEvent{{
+				ID: "outage", Name: "Reduced capacity", Type: domain.EventAssetOutage,
+				AssetID: test.assetID, Start: &start, End: &end, AvailabilityMultiplier: &test.multiplier,
+			}}
+			run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+				ScenarioID: scenario.ID, Planner: domain.PlannerWattson, ActiveEventIDs: []string{"outage"},
+			})
+			if err != nil {
+				t.Fatalf("plan outage scenario: %v", err)
+			}
+			test.assert(t, run.Intervals[0])
+		})
+	}
+}
+
+func TestAssetOutageLimitsBatteryCharging(t *testing.T) {
+	scenario := scarceSupplyScenario(5)
+	for index := range scenario.Signals[2].Values {
+		scenario.Signals[2].Values[index] = 0
+	}
+	capacity, minimum, limit, efficiency, stored := 10.0, 0.0, 4.0, 1.0, 0.0
+	scenario.Site.Assets = append(scenario.Site.Assets, domain.Asset{
+		ID: "battery", Name: "Battery", Type: domain.AssetBattery,
+		CapacityKWH: &capacity, MinimumStoredEnergyKWH: &minimum,
+		MaxChargeKW: &limit, MaxDischargeKW: &limit,
+		ChargeEfficiency: &efficiency, DischargeEfficiency: &efficiency,
+	})
+	scenario.InitialState.Assets = []domain.AssetState{{AssetID: "battery", Type: domain.AssetBattery, StoredEnergyKWH: &stored}}
+	start := scenario.Horizon.StartsAt
+	end := start.Add(15 * time.Minute)
+	multiplier := 0.25
+	scenario.Events = []domain.ScenarioEvent{{
+		ID: "outage", Name: "Battery derating", Type: domain.EventAssetOutage,
+		AssetID: "battery", Start: &start, End: &end, AvailabilityMultiplier: &multiplier,
+	}}
+
+	run, err := deterministicScheduler().Plan(context.Background(), scenario, domain.PlanningRequest{
+		ScenarioID: scenario.ID, Planner: domain.PlannerWattson, ActiveEventIDs: []string{"outage"},
+	})
+	if err != nil {
+		t.Fatalf("plan battery charge outage: %v", err)
+	}
+	if got := run.Intervals[0].Batteries[0].ChargeKW; got > 1+epsilon {
+		t.Fatalf("battery charge = %.3f kW, want at most 1 kW", got)
+	}
+}
+
 func TestDisconnectedTopologyDoesNotDispatchOrServeLoad(t *testing.T) {
 	scenario := loadSeedScenario(t)
 	scenario.Site.Connections = []domain.Connection{}

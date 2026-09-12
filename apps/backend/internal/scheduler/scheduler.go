@@ -16,15 +16,28 @@ import (
 const epsilon = 0.000001
 
 type Scheduler struct {
-	now   func() time.Time
-	newID func() (string, error)
+	now       func() time.Time
+	newID     func() (string, error)
+	optimizer Optimizer
 }
 
-func New() *Scheduler {
-	return &Scheduler{
+type Option func(*Scheduler)
+
+func WithOptimizer(optimizer Optimizer) Option {
+	return func(scheduler *Scheduler) {
+		scheduler.optimizer = optimizer
+	}
+}
+
+func New(options ...Option) *Scheduler {
+	result := &Scheduler{
 		now:   time.Now,
 		newID: randomRunID,
 	}
+	for _, option := range options {
+		option(result)
+	}
+	return result
 }
 
 func (s *Scheduler) Plan(ctx context.Context, scenario domain.Scenario, request domain.PlanningRequest) (domain.PlanRun, error) {
@@ -59,12 +72,46 @@ func (s *Scheduler) Plan(ctx context.Context, scenario domain.Scenario, request 
 		Decisions:      make([]domain.Decision, 0),
 	}
 
+	if request.Planner == domain.PlannerWattson && s.optimizer != nil {
+		if prepared.hasActiveAssetOutage {
+			fallback, fallbackErr := s.planHeuristic(ctx, prepared, run)
+			if fallbackErr != nil {
+				return domain.PlanRun{}, fallbackErr
+			}
+			fallback.Optimization = &domain.OptimizationInfo{
+				Engine: "heuristic", Termination: "fallback", UsedFallback: true,
+				FallbackReason: "asset outage limits require the heuristic scheduler",
+			}
+			return fallback, nil
+		}
+		optimized, optimizeErr := s.planOptimized(ctx, prepared, run)
+		if optimizeErr == nil {
+			return optimized, nil
+		}
+		if ctx.Err() != nil || errors.Is(optimizeErr, context.Canceled) {
+			return domain.PlanRun{}, optimizeErr
+		}
+		fallback, fallbackErr := s.planHeuristic(ctx, prepared, run)
+		if fallbackErr != nil {
+			return domain.PlanRun{}, fallbackErr
+		}
+		fallback.Optimization = &domain.OptimizationInfo{
+			Engine: "heuristic", Termination: "fallback", UsedFallback: true,
+			FallbackReason: optimizeErr.Error(),
+		}
+		return fallback, nil
+	}
+
+	return s.planHeuristic(ctx, prepared, run)
+}
+
+func (s *Scheduler) planHeuristic(ctx context.Context, prepared *preparedScenario, run domain.PlanRun) (domain.PlanRun, error) {
 	plan := buildServicePlan(prepared)
 	state := newDispatchState(prepared)
-	progress := newContractProgress(scenario.Contracts)
+	progress := newContractProgress(prepared.scenario.Contracts)
 	decisionState := newDecisionState()
 
-	for index := 0; index < scenario.Horizon.IntervalCount; index++ {
+	for index := 0; index < prepared.scenario.Horizon.IntervalCount; index++ {
 		if err := ctx.Err(); err != nil {
 			return domain.PlanRun{}, err
 		}
@@ -78,7 +125,7 @@ func (s *Scheduler) Plan(ctx context.Context, scenario domain.Scenario, request 
 		run.Intervals = append(run.Intervals, interval)
 	}
 
-	run.ContractOutcomes = progress.outcomes(scenario.Contracts)
+	run.ContractOutcomes = progress.outcomes(prepared.scenario.Contracts)
 	run.Summary = summarize(run)
 	run.Status = domain.PlanComplete
 	if run.Summary.ContractsBreached > 0 {
@@ -89,22 +136,24 @@ func (s *Scheduler) Plan(ctx context.Context, scenario domain.Scenario, request 
 }
 
 type preparedScenario struct {
-	scenario            domain.Scenario
-	assets              map[string]domain.Asset
-	services            map[string]domain.Service
-	renewableSignals    map[string][]float64
-	demandSignals       map[string][]float64
-	fuelSignals         map[string][]float64
-	intervalHours       float64
-	physicalMinimum     map[string]float64
-	policyMinimum       map[string]float64
-	initialEnergy       map[string]float64
-	initialFuel         map[string]float64
-	initialRunning      map[string]bool
-	connectedAssets     map[string]bool
-	chargeableBatteries map[string]bool
-	connectedServices   map[string]bool
-	totalBatteryLimit   float64
+	scenario             domain.Scenario
+	assets               map[string]domain.Asset
+	services             map[string]domain.Service
+	renewableSignals     map[string][]float64
+	demandSignals        map[string][]float64
+	fuelSignals          map[string][]float64
+	intervalHours        float64
+	physicalMinimum      map[string]float64
+	policyMinimum        map[string]float64
+	initialEnergy        map[string]float64
+	initialFuel          map[string]float64
+	initialRunning       map[string]bool
+	connectedAssets      map[string]bool
+	chargeableBatteries  map[string]bool
+	connectedServices    map[string]bool
+	assetAvailability    map[string][]float64
+	hasActiveAssetOutage bool
+	totalBatteryLimit    float64
 }
 
 func prepareScenario(scenario domain.Scenario, activeEventIDs []string) (*preparedScenario, error) {
@@ -140,9 +189,11 @@ func prepareScenario(scenario domain.Scenario, activeEventIDs []string) (*prepar
 		connectedAssets:     make(map[string]bool),
 		chargeableBatteries: make(map[string]bool),
 		connectedServices:   make(map[string]bool),
+		assetAvailability:   make(map[string][]float64, len(scenario.Site.Assets)),
 	}
 	for _, asset := range scenario.Site.Assets {
 		p.assets[asset.ID] = asset
+		p.assetAvailability[asset.ID] = repeatedFloatValues(scenario.Horizon.IntervalCount, 1)
 		p.connectedAssets[asset.ID] = domain.AssetCanReachController(scenario.Site, asset.ID)
 		if asset.Type == domain.AssetBattery {
 			p.chargeableBatteries[asset.ID] = p.connectedAssets[asset.ID] || hasConnection(scenario.Site.Connections, domain.ControllerNodeID, asset.ID)
@@ -243,7 +294,33 @@ func applyEvent(p *preparedScenario, event domain.ScenarioEvent) {
 			values[delayed] += values[scheduled]
 			values[scheduled] = 0
 		}
+	case domain.EventAssetOutage:
+		p.hasActiveAssetOutage = true
+		values := p.assetAvailability[event.AssetID]
+		for index := range values {
+			start := intervalStart(p.scenario.Horizon, index)
+			if event.Start != nil && event.End != nil && !start.Before(*event.Start) && start.Before(*event.End) {
+				values[index] *= pointerValue(event.AvailabilityMultiplier)
+			}
+		}
+		if asset := p.assets[event.AssetID]; asset.Type == domain.AssetSolar || asset.Type == domain.AssetWind {
+			availability := p.renewableSignals[event.AssetID]
+			for index := range availability {
+				start := intervalStart(p.scenario.Horizon, index)
+				if event.Start != nil && event.End != nil && !start.Before(*event.Start) && start.Before(*event.End) {
+					availability[index] *= pointerValue(event.AvailabilityMultiplier)
+				}
+			}
+		}
 	}
+}
+
+func repeatedFloatValues(count int, value float64) []float64 {
+	values := make([]float64, count)
+	for index := range values {
+		values[index] = value
+	}
+	return values
 }
 
 func signalValuesByID(p *preparedScenario, signalID string) []float64 {

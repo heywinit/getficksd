@@ -21,9 +21,13 @@ import (
 const version = "0.1.0"
 
 type config struct {
-	port           string
-	databasePath   string
-	allowedOrigins map[string]struct{}
+	port             string
+	databasePath     string
+	allowedOrigins   map[string]struct{}
+	optimizerEnabled bool
+	optimizerPython  string
+	optimizerScript  string
+	optimizerTimeout time.Duration
 }
 
 type app struct {
@@ -60,9 +64,20 @@ func main() {
 		log.Fatalf("Scenario seed failed: %v", err)
 	}
 
+	planner := scheduler.New()
+	if cfg.optimizerEnabled {
+		optimizer, optimizerErr := scheduler.NewPythonOptimizer(cfg.optimizerPython, cfg.optimizerScript, cfg.optimizerTimeout)
+		if optimizerErr != nil {
+			log.Printf("MILP optimizer configuration failed; Wattson will use its heuristic: %v", optimizerErr)
+		} else {
+			planner = scheduler.New(scheduler.WithOptimizer(optimizer))
+			log.Printf("MILP optimizer enabled with %s", cfg.optimizerScript)
+		}
+	}
+
 	server := &http.Server{
 		Addr:              ":" + cfg.port,
-		Handler:           newApp(cfg, store, scheduler.New()).routes(),
+		Handler:           newApp(cfg, store, planner).routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -108,8 +123,29 @@ func loadConfig() config {
 			allowedOrigins[origin] = struct{}{}
 		}
 	}
+	optimizerEnabled := !strings.EqualFold(strings.TrimSpace(os.Getenv("MILP_ENABLED")), "false")
+	optimizerPython := strings.TrimSpace(os.Getenv("MILP_PYTHON_PATH"))
+	if optimizerPython == "" {
+		optimizerPython = "optimizer/.venv/bin/python"
+	}
+	optimizerScript := strings.TrimSpace(os.Getenv("MILP_SCRIPT_PATH"))
+	if optimizerScript == "" {
+		optimizerScript = "optimizer/solve.py"
+	}
+	optimizerTimeout := 8 * time.Second
+	if value := strings.TrimSpace(os.Getenv("MILP_TIMEOUT")); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			log.Fatalf("MILP_TIMEOUT must be a positive duration")
+		}
+		optimizerTimeout = parsed
+	}
 
-	return config{port: port, databasePath: databasePath, allowedOrigins: allowedOrigins}
+	return config{
+		port: port, databasePath: databasePath, allowedOrigins: allowedOrigins,
+		optimizerEnabled: optimizerEnabled, optimizerPython: optimizerPython,
+		optimizerScript: optimizerScript, optimizerTimeout: optimizerTimeout,
+	}
 }
 
 func newApp(cfg config, store *database.Store, planner *scheduler.Scheduler) *app {

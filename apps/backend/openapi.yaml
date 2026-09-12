@@ -1145,11 +1145,12 @@ components:
         - $ref: "#/components/schemas/RenewableShortfallEvent"
         - $ref: "#/components/schemas/DemandSurgeEvent"
         - $ref: "#/components/schemas/FuelDeliveryDelayEvent"
+        - $ref: "#/components/schemas/AssetOutageEvent"
       discriminator:
         propertyName: type
     EventBase:
       type: object
-      required: [id, name, type, signal_id]
+      required: [id, name, type]
       properties:
         id: { type: string }
         name: { type: string }
@@ -1159,7 +1160,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/EventBase"
         - type: object
-          required: [start, end, availability_multiplier]
+          required: [signal_id, start, end, availability_multiplier]
           properties:
             type: { type: string, const: renewable_shortfall }
             start: { type: string, format: date-time }
@@ -1169,7 +1170,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/EventBase"
         - type: object
-          required: [start, end, demand_multiplier]
+          required: [signal_id, start, end, demand_multiplier]
           properties:
             type: { type: string, const: demand_surge }
             start: { type: string, format: date-time }
@@ -1179,11 +1180,22 @@ components:
       allOf:
         - $ref: "#/components/schemas/EventBase"
         - type: object
-          required: [scheduled_at, delayed_until]
+          required: [signal_id, scheduled_at, delayed_until]
           properties:
             type: { type: string, const: fuel_delivery_delay }
             scheduled_at: { type: string, format: date-time }
             delayed_until: { type: string, format: date-time }
+    AssetOutageEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          required: [asset_id, start, end, availability_multiplier]
+          properties:
+            type: { type: string, const: asset_outage }
+            asset_id: { type: string }
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time }
+            availability_multiplier: { type: number, minimum: 0, maximum: 1 }
     OperatingPolicy:
       type: object
       additionalProperties: false
@@ -1245,6 +1257,8 @@ components:
             $ref: "#/components/schemas/Decision"
         summary:
           $ref: "#/components/schemas/PlanSummary"
+        optimization:
+          $ref: "#/components/schemas/OptimizationInfo"
         comparison:
           $ref: "#/components/schemas/PlanComparison"
     PlanInterval:
@@ -1425,6 +1439,18 @@ components:
         total_diesel_cost: { type: number, minimum: 0 }
         total_emissions_kg_co2: { type: number, minimum: 0 }
         minimum_battery_energy_kwh: { type: number, minimum: 0 }
+    OptimizationInfo:
+      type: object
+      additionalProperties: false
+      required: [engine, termination, objective_value, mip_gap, solve_ms, used_fallback]
+      properties:
+        engine: { type: string }
+        termination: { type: string }
+        objective_value: { type: number, minimum: 0 }
+        mip_gap: { type: number, minimum: 0 }
+        solve_ms: { type: integer, minimum: 0 }
+        used_fallback: { type: boolean }
+        fallback_reason: { type: string }
     ComparisonMetric:
       type: object
       additionalProperties: false

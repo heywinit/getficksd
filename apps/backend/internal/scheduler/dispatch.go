@@ -84,8 +84,8 @@ func dispatchInterval(
 		})
 	}
 
-	normalBattery, emergencyBattery := batteryDischargeCapacity(p, state)
-	generatorCapacity := generatorCapacity(p, state)
+	normalBattery, emergencyBattery := batteryDischargeCapacity(p, state, index)
+	generatorCapacity := generatorCapacity(p, state, index)
 	normalGrossCapacity := renewableAvailable + sumValues(normalBattery) + sumValues(generatorCapacity)
 	totalGrossCapacity := normalGrossCapacity + sumValues(emergencyBattery)
 	lossFactor := 1 - p.scenario.OperatingPolicy.AssumedLossPercent
@@ -153,7 +153,7 @@ func dispatchInterval(
 	generatorForLoad := math.Min(generatorTotal, loadBeforeGenerators)
 	generatorExcess := math.Max(0, generatorTotal-generatorForLoad)
 	renewableExcess := math.Max(0, renewableAvailable-renewableForLoad)
-	chargeInput := chargeBatteries(p, state, batteryDischarge, renewableExcess+generatorExcess)
+	chargeInput := chargeBatteries(p, state, batteryDischarge, renewableExcess+generatorExcess, index)
 	totalChargeInput := sumValues(chargeInput)
 	renewableForCharge := math.Min(renewableExcess, totalChargeInput)
 	generatorForCharge := math.Min(generatorExcess, math.Max(0, totalChargeInput-renewableForCharge))
@@ -249,7 +249,7 @@ func controlRank(mode domain.ControlMode) int {
 	}
 }
 
-func batteryDischargeCapacity(p *preparedScenario, state *dispatchState) (map[string]float64, map[string]float64) {
+func batteryDischargeCapacity(p *preparedScenario, state *dispatchState, index int) (map[string]float64, map[string]float64) {
 	normal := make(map[string]float64)
 	emergency := make(map[string]float64)
 	for _, asset := range p.scenario.Site.Assets {
@@ -257,7 +257,7 @@ func batteryDischargeCapacity(p *preparedScenario, state *dispatchState) (map[st
 			continue
 		}
 		efficiency := pointerValue(asset.DischargeEfficiency)
-		limit := pointerValue(asset.MaxDischargeKW)
+		limit := pointerValue(asset.MaxDischargeKW) * p.assetAvailability[asset.ID][index]
 		normal[asset.ID] = math.Min(limit, math.Max(0, state.batteryEnergy[asset.ID]-p.policyMinimum[asset.ID])*efficiency/p.intervalHours)
 		physicalCapacity := math.Min(limit, math.Max(0, state.batteryEnergy[asset.ID]-p.physicalMinimum[asset.ID])*efficiency/p.intervalHours)
 		emergency[asset.ID] = math.Max(0, physicalCapacity-normal[asset.ID])
@@ -265,7 +265,7 @@ func batteryDischargeCapacity(p *preparedScenario, state *dispatchState) (map[st
 	return normal, emergency
 }
 
-func generatorCapacity(p *preparedScenario, state *dispatchState) map[string]float64 {
+func generatorCapacity(p *preparedScenario, state *dispatchState, index int) map[string]float64 {
 	capacity := make(map[string]float64)
 	for _, asset := range orderedGenerators(p.scenario.Site.Assets) {
 		if asset.Type != domain.AssetDiesel || !p.connectedAssets[asset.ID] {
@@ -276,7 +276,7 @@ func generatorCapacity(p *preparedScenario, state *dispatchState) map[string]flo
 			availableFuel = math.Max(0, availableFuel-pointerValue(asset.StartupFuelLiters))
 		}
 		fuelBound := availableFuel / pointerValue(asset.LitersPerKWH) / p.intervalHours
-		maximum := pointerValue(asset.MaximumOutputKW)
+		maximum := pointerValue(asset.MaximumOutputKW) * p.assetAvailability[asset.ID][index]
 		if asset.RampRateKWPerMinute != nil {
 			maximum = math.Min(maximum, state.generatorOutput[asset.ID]+*asset.RampRateKWPerMinute*float64(p.scenario.Horizon.IntervalMinutes))
 		}
@@ -373,6 +373,7 @@ func chargeBatteries(
 	state *dispatchState,
 	discharge map[string]float64,
 	surplus float64,
+	index int,
 ) map[string]float64 {
 	input := make(map[string]float64)
 	for _, asset := range p.scenario.Site.Assets {
@@ -380,7 +381,8 @@ func chargeBatteries(
 			continue
 		}
 		energyRoomKW := (pointerValue(asset.CapacityKWH) - state.batteryEnergy[asset.ID]) / pointerValue(asset.ChargeEfficiency) / p.intervalHours
-		amount := math.Min(surplus, math.Min(pointerValue(asset.MaxChargeKW), math.Max(0, energyRoomKW)))
+		chargeLimit := pointerValue(asset.MaxChargeKW) * p.assetAvailability[asset.ID][index]
+		amount := math.Min(surplus, math.Min(chargeLimit, math.Max(0, energyRoomKW)))
 		state.batteryEnergy[asset.ID] += amount * p.intervalHours * pointerValue(asset.ChargeEfficiency)
 		input[asset.ID] = amount
 		surplus -= amount
