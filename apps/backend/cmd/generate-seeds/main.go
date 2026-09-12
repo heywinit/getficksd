@@ -59,6 +59,7 @@ func spitiValleyScenario() domain.Scenario {
 
 	return domain.Scenario{
 		SchemaVersion: "1",
+		Revision:      1,
 		ID:            "spiti-valley-default",
 		Name:          "Spiti Valley operating day",
 		Description:   "A clear autumn day with a possible midday solar shortfall and a delayed evening fuel delivery.",

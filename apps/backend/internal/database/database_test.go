@@ -30,8 +30,8 @@ func TestMigrationsAndStoreRoundTrip(t *testing.T) {
 
 	store := NewStore(connection)
 	scenario := loadScenario(t)
-	if err := store.SaveScenario(ctx, scenario); err != nil {
-		t.Fatalf("save scenario: %v", err)
+	if err := store.CreateScenario(ctx, scenario); err != nil {
+		t.Fatalf("create scenario: %v", err)
 	}
 	loadedScenario, err := store.Scenario(ctx, scenario.ID)
 	if err != nil {
@@ -40,6 +40,20 @@ func TestMigrationsAndStoreRoundTrip(t *testing.T) {
 	if loadedScenario.Site.ID != scenario.Site.ID || len(loadedScenario.Signals) != len(scenario.Signals) {
 		t.Fatalf("stored scenario changed: %#v", loadedScenario)
 	}
+	if err := store.CreateScenario(ctx, scenario); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected duplicate scenario conflict, got %v", err)
+	}
+	scenario.Name = "Updated scenario"
+	if err := store.ReplaceScenario(ctx, scenario); err != nil {
+		t.Fatalf("replace scenario: %v", err)
+	}
+	loadedScenario, err = store.Scenario(ctx, scenario.ID)
+	if err != nil {
+		t.Fatalf("load replaced scenario: %v", err)
+	}
+	if loadedScenario.Name != "Updated scenario" {
+		t.Fatalf("scenario was not replaced: %#v", loadedScenario)
+	}
 
 	run := domain.PlanRun{
 		ID: "run-one", ScenarioID: scenario.ID, Planner: domain.PlannerWattson,
@@ -47,7 +61,7 @@ func TestMigrationsAndStoreRoundTrip(t *testing.T) {
 		ActiveEventIDs: []string{"midday-solar-shortfall"}, Intervals: []domain.PlanInterval{},
 		ContractOutcomes: []domain.ContractOutcome{}, Decisions: []domain.Decision{},
 	}
-	if err := store.SavePlanRun(ctx, run, ""); err != nil {
+	if err := store.SavePlanRun(ctx, run); err != nil {
 		t.Fatalf("save plan run: %v", err)
 	}
 	loadedRun, err := store.PlanRun(ctx, run.ID)

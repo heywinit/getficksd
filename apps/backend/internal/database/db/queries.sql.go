@@ -151,17 +151,12 @@ func (q *Queries) ListPlanRunsByScenario(ctx context.Context, arg ListPlanRunsBy
 	return items, nil
 }
 
-const upsertScenario = `-- name: UpsertScenario :exec
+const insertScenario = `-- name: InsertScenario :exec
 INSERT INTO scenarios (id, site_id, name, schema_version, document, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-    site_id = excluded.site_id,
-    name = excluded.name,
-    schema_version = excluded.schema_version,
-    document = excluded.document
 `
 
-type UpsertScenarioParams struct {
+type InsertScenarioParams struct {
 	ID            string `json:"id"`
 	SiteID        string `json:"site_id"`
 	Name          string `json:"name"`
@@ -170,8 +165,8 @@ type UpsertScenarioParams struct {
 	CreatedAt     string `json:"created_at"`
 }
 
-func (q *Queries) UpsertScenario(ctx context.Context, arg UpsertScenarioParams) error {
-	_, err := q.db.ExecContext(ctx, upsertScenario,
+func (q *Queries) InsertScenario(ctx context.Context, arg InsertScenarioParams) error {
+	_, err := q.db.ExecContext(ctx, insertScenario,
 		arg.ID,
 		arg.SiteID,
 		arg.Name,
@@ -180,4 +175,36 @@ func (q *Queries) UpsertScenario(ctx context.Context, arg UpsertScenarioParams) 
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const updateScenario = `-- name: UpdateScenario :execrows
+UPDATE scenarios
+SET
+    site_id = ?,
+    name = ?,
+    schema_version = ?,
+    document = ?
+WHERE id = ?
+`
+
+type UpdateScenarioParams struct {
+	SiteID        string `json:"site_id"`
+	Name          string `json:"name"`
+	SchemaVersion string `json:"schema_version"`
+	Document      []byte `json:"document"`
+	ID            string `json:"id"`
+}
+
+func (q *Queries) UpdateScenario(ctx context.Context, arg UpdateScenarioParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateScenario,
+		arg.SiteID,
+		arg.Name,
+		arg.SchemaVersion,
+		arg.Document,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

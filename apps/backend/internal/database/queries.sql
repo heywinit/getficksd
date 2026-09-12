@@ -1,11 +1,15 @@
--- name: UpsertScenario :exec
+-- name: InsertScenario :exec
 INSERT INTO scenarios (id, site_id, name, schema_version, document, created_at)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-    site_id = excluded.site_id,
-    name = excluded.name,
-    schema_version = excluded.schema_version,
-    document = excluded.document;
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: UpdateScenario :execrows
+UPDATE scenarios
+SET
+    site_id = ?,
+    name = ?,
+    schema_version = ?,
+    document = ?
+WHERE id = ?;
 
 -- name: GetScenario :one
 SELECT id, site_id, name, schema_version, document, created_at

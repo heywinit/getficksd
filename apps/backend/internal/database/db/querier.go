@@ -12,9 +12,10 @@ type Querier interface {
 	GetPlanRun(ctx context.Context, id string) (PlanRun, error)
 	GetScenario(ctx context.Context, id string) (Scenario, error)
 	GetScenarioBySite(ctx context.Context, siteID string) (Scenario, error)
+	InsertScenario(ctx context.Context, arg InsertScenarioParams) error
 	InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error
 	ListPlanRunsByScenario(ctx context.Context, arg ListPlanRunsByScenarioParams) ([]PlanRun, error)
-	UpsertScenario(ctx context.Context, arg UpsertScenarioParams) error
+	UpdateScenario(ctx context.Context, arg UpdateScenarioParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

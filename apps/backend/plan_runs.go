@@ -8,14 +8,24 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/heywinit/wattson/backend/internal/comparison"
 	"github.com/heywinit/wattson/backend/internal/database"
 	"github.com/heywinit/wattson/backend/internal/domain"
 )
+
+type planRunResponse struct {
+	domain.PlanRun
+	Comparison *comparison.Result `json:"comparison,omitempty"`
+}
 
 func (a *app) createPlanRun(response http.ResponseWriter, request *http.Request) {
 	var planningRequest domain.PlanningRequest
 	if err := decodeJSON(response, request, &planningRequest); err != nil {
 		writeJSON(response, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	if planningRequest.Planner == domain.PlannerBaseline && len(planningRequest.ActiveEventIDs) != 0 {
+		writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The baseline planner cannot include active events."})
 		return
 	}
 
@@ -28,16 +38,42 @@ func (a *app) createPlanRun(response http.ResponseWriter, request *http.Request)
 		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The scenario could not be loaded."})
 		return
 	}
+	var parentRun *domain.PlanRun
 	if planningRequest.ParentRunID != "" {
 		parent, err := a.store.PlanRun(request.Context(), planningRequest.ParentRunID)
 		if errors.Is(err, database.ErrNotFound) {
 			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The parent plan run does not exist."})
 			return
 		}
-		if err != nil || parent.ScenarioID != planningRequest.ScenarioID {
+		if err != nil {
+			writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The parent plan run could not be loaded."})
+			return
+		}
+		if parent.ScenarioID != planningRequest.ScenarioID {
 			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The parent plan run does not belong to this scenario."})
 			return
 		}
+		if parent.ScenarioRevision != scenario.Revision {
+			writeJSON(response, http.StatusConflict, map[string]string{"message": "The parent plan run uses an older scenario revision. Create a fresh baseline."})
+			return
+		}
+		if parent.Planner != domain.PlannerBaseline {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The parent plan run must use the baseline planner."})
+			return
+		}
+		if parent.Status != domain.PlanComplete && parent.Status != domain.PlanInfeasible {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The parent baseline must be finished."})
+			return
+		}
+		if len(parent.ActiveEventIDs) != 0 {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "The parent baseline must not include active events."})
+			return
+		}
+		if planningRequest.Planner != domain.PlannerWattson {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"message": "Only a Wattson plan can compare with a baseline parent."})
+			return
+		}
+		parentRun = &parent
 	}
 
 	run, err := a.scheduler.Plan(request.Context(), scenario, planningRequest)
@@ -45,11 +81,30 @@ func (a *app) createPlanRun(response http.ResponseWriter, request *http.Request)
 		writeJSON(response, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
 		return
 	}
-	if err := a.store.SavePlanRun(request.Context(), run, planningRequest.ParentRunID); err != nil {
+	run.ParentRunID = planningRequest.ParentRunID
+	run.ScenarioRevision = scenario.Revision
+	var result *comparison.Result
+	if parentRun != nil {
+		for index := range run.Decisions {
+			difference, err := comparison.BaselineDifferenceForDecision(run.Decisions[index], *parentRun, run)
+			if err != nil {
+				writeJSON(response, http.StatusUnprocessableEntity, map[string]string{"message": "The parent plan run cannot be compared with this plan: " + err.Error()})
+				return
+			}
+			run.Decisions[index].BaselineDifference = difference
+		}
+		calculated, err := comparison.Compare(*parentRun, run)
+		if err != nil {
+			writeJSON(response, http.StatusUnprocessableEntity, map[string]string{"message": "The parent plan run cannot be compared with this plan: " + err.Error()})
+			return
+		}
+		result = &calculated
+	}
+	if err := a.store.SavePlanRun(request.Context(), run); err != nil {
 		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The plan run could not be saved."})
 		return
 	}
-	writeJSON(response, http.StatusCreated, run)
+	writeJSON(response, http.StatusCreated, planRunResponse{PlanRun: run, Comparison: result})
 }
 
 func (a *app) getPlanRun(response http.ResponseWriter, request *http.Request) {
@@ -62,7 +117,52 @@ func (a *app) getPlanRun(response http.ResponseWriter, request *http.Request) {
 		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The plan run could not be loaded."})
 		return
 	}
-	writeJSON(response, http.StatusOK, run)
+	result, err := a.comparisonForRun(request, run)
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The plan comparison could not be calculated."})
+		return
+	}
+	writeJSON(response, http.StatusOK, planRunResponse{PlanRun: run, Comparison: result})
+}
+
+func (a *app) getPlanRunComparison(response http.ResponseWriter, request *http.Request) {
+	run, err := a.store.PlanRun(request.Context(), request.PathValue("runID"))
+	if errors.Is(err, database.ErrNotFound) {
+		writeJSON(response, http.StatusNotFound, map[string]string{"message": "The plan run does not exist."})
+		return
+	}
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The plan run could not be loaded."})
+		return
+	}
+	result, err := a.comparisonForRun(request, run)
+	if err != nil {
+		writeJSON(response, http.StatusInternalServerError, map[string]string{"message": "The plan comparison could not be calculated."})
+		return
+	}
+	if result == nil {
+		writeJSON(response, http.StatusConflict, map[string]string{"message": "The plan run does not have a baseline parent."})
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (a *app) comparisonForRun(request *http.Request, run domain.PlanRun) (*comparison.Result, error) {
+	if run.ParentRunID == "" {
+		return nil, nil
+	}
+	parent, err := a.store.PlanRun(request.Context(), run.ParentRunID)
+	if err != nil {
+		return nil, err
+	}
+	if parent.ScenarioID != run.ScenarioID || parent.ScenarioRevision != run.ScenarioRevision {
+		return nil, errors.New("plan run and baseline use different scenario revisions")
+	}
+	result, err := comparison.Compare(parent, run)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (a *app) listPlanRuns(response http.ResponseWriter, request *http.Request) {

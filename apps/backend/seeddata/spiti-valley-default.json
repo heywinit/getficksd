@@ -1,5 +1,6 @@
 {
   "schema_version": "1",
+  "revision": 1,
   "id": "spiti-valley-default",
   "name": "Spiti Valley operating day",
   "description": "A clear autumn day with a possible midday solar shortfall and a delayed evening fuel delivery.",

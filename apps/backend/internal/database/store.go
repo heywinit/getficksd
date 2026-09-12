@@ -6,13 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/heywinit/wattson/backend/internal/database/db"
 	"github.com/heywinit/wattson/backend/internal/domain"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrConflict = errors.New("conflict")
+	ErrNotFound = errors.New("not found")
+)
 
 type Store struct {
 	queries *db.Queries
@@ -22,25 +26,57 @@ func NewStore(database *sql.DB) *Store {
 	return &Store{queries: db.New(database)}
 }
 
-func (s *Store) SaveScenario(ctx context.Context, scenario domain.Scenario) error {
+func (s *Store) CreateScenario(ctx context.Context, scenario domain.Scenario) error {
+	parameters, err := scenarioParameters(scenario)
+	if err != nil {
+		return err
+	}
+	if err := s.queries.InsertScenario(ctx, parameters); err != nil {
+		if isUniqueConstraint(err) {
+			return fmt.Errorf("create scenario: %w", ErrConflict)
+		}
+		return fmt.Errorf("create scenario: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ReplaceScenario(ctx context.Context, scenario domain.Scenario) error {
+	parameters, err := scenarioParameters(scenario)
+	if err != nil {
+		return err
+	}
+	updated, err := s.queries.UpdateScenario(ctx, db.UpdateScenarioParams{
+		SiteID:        parameters.SiteID,
+		Name:          parameters.Name,
+		SchemaVersion: parameters.SchemaVersion,
+		Document:      parameters.Document,
+		ID:            parameters.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("replace scenario: %w", err)
+	}
+	if updated == 0 {
+		return fmt.Errorf("replace scenario: %w", ErrNotFound)
+	}
+	return nil
+}
+
+func scenarioParameters(scenario domain.Scenario) (db.InsertScenarioParams, error) {
 	if err := domain.ValidateScenario(scenario); err != nil {
-		return fmt.Errorf("validate scenario: %w", err)
+		return db.InsertScenarioParams{}, fmt.Errorf("validate scenario: %w", err)
 	}
 	document, err := json.Marshal(scenario)
 	if err != nil {
-		return fmt.Errorf("encode scenario: %w", err)
+		return db.InsertScenarioParams{}, fmt.Errorf("encode scenario: %w", err)
 	}
-	if err := s.queries.UpsertScenario(ctx, db.UpsertScenarioParams{
+	return db.InsertScenarioParams{
 		ID:            scenario.ID,
 		SiteID:        scenario.Site.ID,
 		Name:          scenario.Name,
 		SchemaVersion: scenario.SchemaVersion,
 		Document:      document,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
-	}); err != nil {
-		return fmt.Errorf("save scenario: %w", err)
-	}
-	return nil
+	}, nil
 }
 
 func (s *Store) Scenario(ctx context.Context, id string) (domain.Scenario, error) {
@@ -59,7 +95,7 @@ func (s *Store) ScenarioBySite(ctx context.Context, siteID string) (domain.Scena
 	return decodeScenario(row.Document)
 }
 
-func (s *Store) SavePlanRun(ctx context.Context, run domain.PlanRun, parentRunID string) error {
+func (s *Store) SavePlanRun(ctx context.Context, run domain.PlanRun) error {
 	document, err := json.Marshal(run)
 	if err != nil {
 		return fmt.Errorf("encode plan run: %w", err)
@@ -69,8 +105,8 @@ func (s *Store) SavePlanRun(ctx context.Context, run domain.PlanRun, parentRunID
 		return fmt.Errorf("encode active events: %w", err)
 	}
 	parent := sql.NullString{}
-	if parentRunID != "" {
-		parent = sql.NullString{String: parentRunID, Valid: true}
+	if run.ParentRunID != "" {
+		parent = sql.NullString{String: run.ParentRunID, Valid: true}
 	}
 	if err := s.queries.InsertPlanRun(ctx, db.InsertPlanRunParams{
 		ID:             run.ID,
@@ -92,7 +128,14 @@ func (s *Store) PlanRun(ctx context.Context, id string) (domain.PlanRun, error) 
 	if err != nil {
 		return domain.PlanRun{}, storeError("get plan run", err)
 	}
-	return decodePlanRun(row.Document)
+	run, err := decodePlanRun(row.Document)
+	if err != nil {
+		return domain.PlanRun{}, err
+	}
+	if row.ParentRunID.Valid {
+		run.ParentRunID = row.ParentRunID.String
+	}
+	return run, nil
 }
 
 func (s *Store) PlanRuns(ctx context.Context, scenarioID string, limit, offset int64) ([]domain.PlanRun, error) {
@@ -109,6 +152,9 @@ func (s *Store) PlanRuns(ctx context.Context, scenarioID string, limit, offset i
 		run, err := decodePlanRun(row.Document)
 		if err != nil {
 			return nil, err
+		}
+		if row.ParentRunID.Valid {
+			run.ParentRunID = row.ParentRunID.String
 		}
 		runs = append(runs, run)
 	}
@@ -136,4 +182,8 @@ func storeError(operation string, err error) error {
 		return fmt.Errorf("%s: %w", operation, ErrNotFound)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func isUniqueConstraint(err error) bool {
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }

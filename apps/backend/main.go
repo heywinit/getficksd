@@ -119,9 +119,16 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /health", a.health)
 	mux.HandleFunc("GET /v1/demo/operators", a.listDemoOperators)
 	mux.HandleFunc("GET /v1/demo/sites/{siteID}/scenario", a.getDemoScenario)
+	mux.HandleFunc("POST /v1/scenarios", a.createScenario)
 	mux.HandleFunc("GET /v1/scenarios/{scenarioID}", a.getScenario)
+	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}", a.replaceScenario)
+	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}/signals/{signalID}", a.replaceSignalValues)
+	mux.HandleFunc("PUT /v1/scenarios/{scenarioID}/initial-state", a.replaceInitialState)
+	mux.HandleFunc("POST /v1/scenarios/{scenarioID}/events", a.createScenarioEvent)
+	mux.HandleFunc("DELETE /v1/scenarios/{scenarioID}/events/{eventID}", a.deleteScenarioEvent)
 	mux.HandleFunc("POST /v1/plan-runs", a.createPlanRun)
 	mux.HandleFunc("GET /v1/plan-runs/{runID}", a.getPlanRun)
+	mux.HandleFunc("GET /v1/plan-runs/{runID}/comparison", a.getPlanRunComparison)
 	mux.HandleFunc("GET /v1/scenarios/{scenarioID}/plan-runs", a.listPlanRuns)
 	mux.HandleFunc("GET /v1/events", a.events)
 
@@ -181,7 +188,7 @@ func (a *app) cors(next http.Handler) http.Handler {
 		if _, allowed := a.config.allowedOrigins[origin]; allowed {
 			response.Header().Set("Access-Control-Allow-Origin", origin)
 			response.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type")
-			response.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			response.Header().Set("Access-Control-Allow-Methods", "DELETE, GET, POST, PUT, OPTIONS")
 			response.Header().Add("Vary", "Origin")
 		}
 

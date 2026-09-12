@@ -152,6 +152,7 @@ type OperatingPolicy struct {
 
 type Scenario struct {
 	SchemaVersion   string          `json:"schema_version"`
+	Revision        int             `json:"revision"`
 	ID              string          `json:"id"`
 	Name            string          `json:"name"`
 	Description     string          `json:"description"`
@@ -287,6 +288,8 @@ type PlanSummary struct {
 type PlanRun struct {
 	ID               string            `json:"id"`
 	ScenarioID       string            `json:"scenario_id"`
+	ScenarioRevision int               `json:"scenario_revision"`
+	ParentRunID      string            `json:"parent_run_id,omitempty"`
 	Planner          Planner           `json:"planner"`
 	Status           PlanStatus        `json:"status"`
 	CreatedAt        time.Time         `json:"created_at"`

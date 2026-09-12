@@ -68,13 +68,203 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: The immutable scenario input for planning.
+          description: The current revision of the scenario input for planning.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Scenario"
         "404":
           description: The scenario does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: replaceScenario
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Scenario"
+      responses:
+        "200":
+          description: The full validated replacement scenario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "400":
+          description: The body is invalid or its ID does not match the path.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: The scenario does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/scenarios:
+    post:
+      operationId: createScenario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Scenario"
+      responses:
+        "201":
+          description: The validated scenario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "400":
+          description: The scenario body is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: A scenario uses this ID already.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/scenarios/{scenario_id}/signals/{signal_id}:
+    put:
+      operationId: replaceScenarioSignalValues
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: signal_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalValuesUpdate"
+      responses:
+        "200":
+          description: The scenario with the validated signal values.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "400":
+          description: The values make the scenario invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: The scenario or signal does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/scenarios/{scenario_id}/initial-state:
+    put:
+      operationId: replaceScenarioInitialState
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitialState"
+      responses:
+        "200":
+          description: The scenario with the validated battery and fuel state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "400":
+          description: The initial state makes the scenario invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: The scenario does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/scenarios/{scenario_id}/events:
+    post:
+      operationId: createScenarioEvent
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScenarioEvent"
+      responses:
+        "201":
+          description: The scenario with the new event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scenario"
+        "400":
+          description: The event makes the scenario invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: The scenario does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: An event uses this ID already.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/scenarios/{scenario_id}/events/{event_id}:
+    delete:
+      operationId: deleteScenarioEvent
+      parameters:
+        - name: scenario_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: event_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: The event was removed from the scenario.
+        "404":
+          description: The scenario or event does not exist.
           content:
             application/json:
               schema:
@@ -107,6 +297,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: The parent baseline uses a different scenario revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "422":
           description: The scenario or active event selection cannot be planned.
           content:
@@ -130,6 +326,45 @@ paths:
                 $ref: "#/components/schemas/PlanRun"
         "404":
           description: The plan run does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The plan run or its parent comparison could not be loaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/plan-runs/{run_id}/comparison:
+    get:
+      operationId: getPlanRunComparison
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: A measured comparison with the persisted baseline parent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanComparison"
+        "404":
+          description: The plan run does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The plan run does not have a baseline parent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The run or its parent comparison could not be loaded.
           content:
             application/json:
               schema:
@@ -211,6 +446,7 @@ components:
       additionalProperties: false
       required:
         - schema_version
+        - revision
         - id
         - name
         - description
@@ -223,6 +459,7 @@ components:
         - operating_policy
       properties:
         schema_version: { type: string, const: "1" }
+        revision: { type: integer, minimum: 1, readOnly: true }
         id: { type: string }
         name: { type: string }
         description: { type: string }
@@ -419,6 +656,13 @@ components:
       minItems: 96
       maxItems: 96
       items: { type: number, minimum: 0 }
+    SignalValuesUpdate:
+      type: object
+      additionalProperties: false
+      required: [values]
+      properties:
+        values:
+          $ref: "#/components/schemas/IntervalValues"
     Contract:
       oneOf:
         - $ref: "#/components/schemas/ContinuousPowerContract"
@@ -530,6 +774,7 @@ components:
       required:
         - id
         - scenario_id
+        - scenario_revision
         - planner
         - status
         - created_at
@@ -541,6 +786,8 @@ components:
       properties:
         id: { type: string }
         scenario_id: { type: string }
+        scenario_revision: { type: integer, minimum: 1 }
+        parent_run_id: { type: string }
         planner: { type: string, enum: [baseline, wattson] }
         status: { type: string, enum: [computing, complete, infeasible, failed] }
         created_at: { type: string, format: date-time }
@@ -561,6 +808,8 @@ components:
             $ref: "#/components/schemas/Decision"
         summary:
           $ref: "#/components/schemas/PlanSummary"
+        comparison:
+          $ref: "#/components/schemas/PlanComparison"
     PlanInterval:
       type: object
       additionalProperties: false
@@ -728,3 +977,244 @@ components:
         total_diesel_cost: { type: number, minimum: 0 }
         total_emissions_kg_co2: { type: number, minimum: 0 }
         minimum_battery_energy_kwh: { type: number, minimum: 0 }
+    ComparisonMetric:
+      type: object
+      additionalProperties: false
+      required: [baseline, candidate, delta]
+      properties:
+        baseline: { type: number }
+        candidate: { type: number }
+        delta: { type: number }
+    ComparisonCount:
+      type: object
+      additionalProperties: false
+      required: [baseline, candidate, delta]
+      properties:
+        baseline: { type: integer }
+        candidate: { type: integer }
+        delta: { type: integer }
+    ComparisonSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - contracts_met
+        - contracts_breached
+        - contract_shortfall
+        - renewable_energy_kwh
+        - diesel_energy_kwh
+        - delivered_energy_kwh
+        - deferred_energy_kwh
+        - unserved_energy_kwh
+        - total_diesel_cost
+        - total_emissions_kg_co2
+        - minimum_battery_energy_kwh
+      properties:
+        contracts_met: { $ref: "#/components/schemas/ComparisonCount" }
+        contracts_breached: { $ref: "#/components/schemas/ComparisonCount" }
+        contract_shortfall: { $ref: "#/components/schemas/ComparisonMetric" }
+        renewable_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        diesel_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        delivered_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        deferred_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        unserved_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        total_diesel_cost: { $ref: "#/components/schemas/ComparisonMetric" }
+        total_emissions_kg_co2: { $ref: "#/components/schemas/ComparisonMetric" }
+        minimum_battery_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+    PlanComparison:
+      type: object
+      additionalProperties: false
+      required:
+        - baseline_run_id
+        - candidate_run_id
+        - summary
+        - contracts
+        - services
+        - renewables
+        - batteries
+        - generators
+        - intervals
+      properties:
+        baseline_run_id: { type: string }
+        candidate_run_id: { type: string }
+        summary: { $ref: "#/components/schemas/ComparisonSummary" }
+        contracts:
+          type: array
+          items: { $ref: "#/components/schemas/ContractComparison" }
+        services:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceComparison" }
+        renewables:
+          type: array
+          items: { $ref: "#/components/schemas/RenewableComparison" }
+        batteries:
+          type: array
+          items: { $ref: "#/components/schemas/BatteryComparison" }
+        generators:
+          type: array
+          items: { $ref: "#/components/schemas/GeneratorComparison" }
+        intervals:
+          type: array
+          items: { $ref: "#/components/schemas/IntervalComparison" }
+    ContractComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          contract_id,
+          baseline_present,
+          candidate_present,
+          status_change,
+          delivered_energy_kwh,
+          delivered_runtime_minutes,
+          shortfall,
+        ]
+      properties:
+        contract_id: { type: string }
+        baseline_present: { type: boolean }
+        candidate_present: { type: boolean }
+        baseline_status: { type: string, enum: [safe, at_risk, met, breached] }
+        candidate_status: { type: string, enum: [safe, at_risk, met, breached] }
+        status_change: { type: string }
+        delivered_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        delivered_runtime_minutes: { $ref: "#/components/schemas/ComparisonCount" }
+        shortfall: { $ref: "#/components/schemas/ComparisonMetric" }
+        baseline_first_risk_interval: { type: integer, minimum: 0 }
+        candidate_first_risk_interval: { type: integer, minimum: 0 }
+    ServiceComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          service_id,
+          baseline_present,
+          candidate_present,
+          requested_energy_kwh,
+          delivered_energy_kwh,
+          deferred_energy_kwh,
+          unserved_energy_kwh,
+        ]
+      properties:
+        service_id: { type: string }
+        baseline_present: { type: boolean }
+        candidate_present: { type: boolean }
+        requested_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        delivered_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        deferred_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        unserved_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+    RenewableComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          asset_id,
+          baseline_present,
+          candidate_present,
+          available_energy_kwh,
+          used_energy_kwh,
+          curtailed_energy_kwh,
+        ]
+      properties:
+        asset_id: { type: string }
+        baseline_present: { type: boolean }
+        candidate_present: { type: boolean }
+        available_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        used_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        curtailed_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+    BatteryComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          asset_id,
+          baseline_present,
+          candidate_present,
+          charge_energy_kwh,
+          discharge_energy_kwh,
+          minimum_energy_kwh,
+          ending_energy_kwh,
+        ]
+      properties:
+        asset_id: { type: string }
+        baseline_present: { type: boolean }
+        candidate_present: { type: boolean }
+        charge_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        discharge_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        minimum_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        ending_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+    GeneratorComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          asset_id,
+          baseline_present,
+          candidate_present,
+          output_energy_kwh,
+          fuel_used_liters,
+          fuel_remaining_liters,
+          diesel_cost,
+          emissions_kg_co2,
+        ]
+      properties:
+        asset_id: { type: string }
+        baseline_present: { type: boolean }
+        candidate_present: { type: boolean }
+        output_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        fuel_used_liters: { $ref: "#/components/schemas/ComparisonMetric" }
+        fuel_remaining_liters: { $ref: "#/components/schemas/ComparisonMetric" }
+        diesel_cost: { $ref: "#/components/schemas/ComparisonMetric" }
+        emissions_kg_co2: { $ref: "#/components/schemas/ComparisonMetric" }
+    ContractStatusChange:
+      type: object
+      additionalProperties: false
+      required: [contract_id, baseline_present, candidate_present, status_change]
+      properties:
+        contract_id: { type: string }
+        baseline_present: { type: boolean }
+        candidate_present: { type: boolean }
+        baseline_status: { type: string, enum: [safe, at_risk, met, breached] }
+        candidate_status: { type: string, enum: [safe, at_risk, met, breached] }
+        status_change: { type: string }
+    IntervalComparison:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          index,
+          start,
+          end,
+          supply_kw,
+          demand_kw,
+          delivered_kw,
+          deferred_kw,
+          unserved_kw,
+          renewable_kw,
+          renewable_used_kw,
+          curtailed_kw,
+          battery_charge_kw,
+          battery_output_kw,
+          battery_ending_energy_kwh,
+          diesel_output_kw,
+          diesel_fuel_used_liters,
+          contract_changes,
+        ]
+      properties:
+        index: { type: integer, minimum: 0 }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        supply_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        demand_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        delivered_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        deferred_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        unserved_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        renewable_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        renewable_used_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        curtailed_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        battery_charge_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        battery_output_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        battery_ending_energy_kwh: { $ref: "#/components/schemas/ComparisonMetric" }
+        diesel_output_kw: { $ref: "#/components/schemas/ComparisonMetric" }
+        diesel_fuel_used_liters: { $ref: "#/components/schemas/ComparisonMetric" }
+        contract_changes:
+          type: array
+          items: { $ref: "#/components/schemas/ContractStatusChange" }
