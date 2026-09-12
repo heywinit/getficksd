@@ -31,6 +31,10 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  EChartsRadialChart,
+  type ChartConfig,
+} from "@/components/evilcharts/charts/echarts-radial-chart";
 import { updateScenario } from "@/lib/backend";
 import type { ContractPriority, ContractStatus, PlanRun, Scenario } from "@/lib/plan-run";
 
@@ -140,6 +144,23 @@ const priorityOptions: Array<{ priority: ContractPriority; title: string; detail
   { priority: "flexible", title: "Can move", detail: "Use the best available time" },
 ];
 
+const progressChartConfig = {
+  Critical: {
+    label: "Critical progress",
+    colors: { light: ["var(--chart-4)"], dark: ["var(--chart-4)"] },
+  },
+  Essential: {
+    label: "Essential progress",
+    colors: { light: ["var(--chart-2)"], dark: ["var(--chart-2)"] },
+  },
+  Flexible: {
+    label: "Flexible progress",
+    colors: { light: ["var(--chart-3)"], dark: ["var(--chart-3)"] },
+  },
+} satisfies ChartConfig;
+
+const progressChartOptions = { animationDuration: 350 };
+
 export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run?: PlanRun }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Contract | "new" | null>(null);
@@ -147,6 +168,9 @@ export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run
     () => new Map(run?.contract_outcomes.map((outcome) => [outcome.contract_id, outcome]) ?? []),
     [run],
   );
+  const protectedCount = run?.contract_outcomes.filter(
+    (outcome) => outcome.status === "met" || outcome.status === "safe",
+  ).length;
   const mutation = useMutation({
     mutationFn: async (next: Scenario) => updateScenario(next),
     onSuccess: (saved) => {
@@ -183,35 +207,44 @@ export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run
             Describe the promise. Wattson creates the scheduling rule.
           </p>
         </div>
-        <Button
-          size="sm"
-          onClick={() => setEditing("new")}
-          disabled={!scenario || mutation.isPending}
-        >
-          <PlusIcon /> Add commitment
-        </Button>
+        <div className="flex items-center gap-2">
+          {run && scenario ? (
+            <span className="rounded-full border border-border bg-card px-2.5 py-1 text-xs tabular-nums text-muted-foreground">
+              <strong className="font-semibold text-foreground">{protectedCount}</strong>/
+              {scenario.contracts.length} protected
+            </span>
+          ) : null}
+          <Button
+            size="sm"
+            onClick={() => setEditing("new")}
+            disabled={!scenario || mutation.isPending}
+          >
+            <PlusIcon /> Add commitment
+          </Button>
+        </div>
       </header>
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {scenario?.contracts.map((contract) => {
           const service = scenario.site.services.find((item) => item.id === contract.service_id);
           const outcome = outcomes.get(contract.id);
           const progress = contractProgress(contract, outcome);
           const ServiceIcon = serviceIcon(service?.name ?? "");
           return (
-            <article key={contract.id} className="rounded-xl border border-border bg-card p-4">
-              <div className="flex items-start gap-3">
-                <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+            <article
+              key={contract.id}
+              className="group rounded-xl border border-border bg-card p-3 transition-colors hover:border-primary/40"
+            >
+              <div className="flex items-start gap-2">
+                <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
                   <ServiceIcon className="size-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="truncate text-sm font-medium">{contract.name}</h3>
-                    <PriorityBadge priority={contract.priority} />
-                    <StatusBadge status={outcome?.status} />
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {contractSentence(contract, scenario)}
+                  <h3 className="truncate text-sm font-medium" title={contract.name}>
+                    {contract.name}
+                  </h3>
+                  <p className="truncate text-[10px] text-muted-foreground">
+                    {service?.name ?? "Unknown service"}
                   </p>
                 </div>
                 <Button
@@ -223,18 +256,28 @@ export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run
                   <PencilIcon />
                 </Button>
               </div>
-              <div className="mt-4">
-                <div className="mb-1.5 flex justify-between text-[10px] text-muted-foreground">
-                  <span>{progress.label}</span>
-                  <span>{progress.detail}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className={`h-full rounded-full ${outcome?.status === "breached" ? "bg-destructive" : "bg-primary"}`}
-                    style={{ width: `${progress.percent}%` }}
-                  />
+
+              <div className="mt-3 flex items-center gap-3">
+                <CommitmentProgressChart
+                  percent={progress.percent}
+                  priority={contract.priority}
+                  label={`${contract.name}: ${progress.label}`}
+                />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex flex-wrap gap-1">
+                    <StatusBadge status={outcome?.status} />
+                    <PriorityBadge priority={contract.priority} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Metric label="Target" value={progress.target} />
+                    <Metric label="Remaining" value={progress.remaining} />
+                  </div>
                 </div>
               </div>
+
+              <p className="mt-3 line-clamp-2 min-h-8 text-[10px] leading-4 text-muted-foreground">
+                {contractSentence(contract, scenario)}
+              </p>
             </article>
           );
         })}
@@ -265,6 +308,51 @@ export function ContractsWorkspace({ scenario, run }: { scenario?: Scenario; run
         }
       />
     </section>
+  );
+}
+
+function CommitmentProgressChart({
+  percent,
+  priority,
+  label,
+}: {
+  percent: number;
+  priority: ContractPriority;
+  label: string;
+}) {
+  const name =
+    priority === "critical" ? "Critical" : priority === "essential" ? "Essential" : "Flexible";
+  const data = useMemo(() => [{ name, value: percent }], [name, percent]);
+  return (
+    <div className="relative size-[4.75rem] shrink-0" role="img" aria-label={label}>
+      <EChartsRadialChart
+        className="absolute inset-0"
+        data={data}
+        config={progressChartConfig}
+        nameKey="name"
+        max={100}
+        innerRadius="60%"
+        outerRadius="92%"
+        renderer="svg"
+        chartOptions={progressChartOptions}
+      >
+        <EChartsRadialChart.RadialBar dataKey="value" barSize={9} cornerRadius={8} showBackground />
+      </EChartsRadialChart>
+      <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center">
+        <span className="text-sm font-semibold tabular-nums">{Math.round(percent)}%</span>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-muted/50 px-2 py-1.5">
+      <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-medium tabular-nums" title={value}>
+        {value}
+      </p>
+    </div>
   );
 }
 
@@ -620,29 +708,48 @@ function StatusBadge({ status }: { status?: ContractStatus }) {
 }
 
 function contractProgress(contract: Contract, outcome?: PlanRun["contract_outcomes"][number]) {
-  if (!outcome) return { percent: 0, label: "Not calculated", detail: "Run the scenario" };
+  if (!outcome)
+    return {
+      percent: 0,
+      label: "Not calculated",
+      target: contractTarget(contract),
+      remaining: "Run plan",
+    };
   if (contract.kind === "runtime_by_deadline") {
     const target = contract.required_runtime_minutes ?? 1;
+    const remaining = Math.max(0, target - outcome.delivered_runtime_minutes);
     return {
       percent: clamp((outcome.delivered_runtime_minutes / target) * 100, 0, 100),
       label: `${outcome.delivered_runtime_minutes} min delivered`,
-      detail: `${target} min target`,
+      target: `${formatNumber(target)} min`,
+      remaining: `${formatNumber(remaining)} min`,
     };
   }
   if (contract.kind === "energy_by_deadline") {
     const target = contract.required_energy_kwh ?? 1;
+    const remaining = Math.max(0, target - outcome.delivered_energy_kwh);
     return {
       percent: clamp((outcome.delivered_energy_kwh / target) * 100, 0, 100),
       label: `${formatNumber(outcome.delivered_energy_kwh)} kWh delivered`,
-      detail: `${formatNumber(target)} kWh target`,
+      target: `${formatNumber(target)} kWh`,
+      remaining: `${formatNumber(remaining)} kWh`,
     };
   }
   return {
     percent: outcome.status === "met" ? 100 : 0,
     label:
       outcome.status === "met" ? "Protected for the full window" : "Power fell below the promise",
-    detail: `${formatNumber(contract.minimum_power_kw ?? 0)} kW minimum`,
+    target: `${formatNumber(contract.minimum_power_kw ?? 0)} kW`,
+    remaining: `${formatNumber(outcome.shortfall)} kWh`,
   };
+}
+
+function contractTarget(contract: Contract) {
+  if (contract.kind === "runtime_by_deadline")
+    return `${formatNumber(contract.required_runtime_minutes ?? 0)} min`;
+  if (contract.kind === "energy_by_deadline")
+    return `${formatNumber(contract.required_energy_kwh ?? 0)} kWh`;
+  return `${formatNumber(contract.minimum_power_kw ?? 0)} kW`;
 }
 
 function contractSentence(contract: Contract, scenario: Scenario) {

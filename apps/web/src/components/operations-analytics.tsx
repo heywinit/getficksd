@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ShieldCheckIcon } from "lucide-react";
 
 import {
   EChartsLineChart,
@@ -100,6 +101,7 @@ export function OperationsAnalytics({
           axisUnit="kW"
           isLoading={isLoading}
           alert={metrics.unservedEnergy > 0}
+          success={Boolean(run) && metrics.unservedEnergy < 0.0001}
         />
         <AnalyticsCard
           title="Battery reserve"
@@ -125,6 +127,7 @@ function AnalyticsCard({
   showAxis = false,
   isLoading,
   alert = false,
+  success = false,
   className = "",
 }: {
   title: string;
@@ -136,6 +139,7 @@ function AnalyticsCard({
   showAxis?: boolean;
   isLoading: boolean;
   alert?: boolean;
+  success?: boolean;
   className?: string;
 }) {
   return (
@@ -155,32 +159,46 @@ function AnalyticsCard({
       </header>
 
       <div className="min-h-0 flex-1 px-1.5 pb-1.5">
-        <EChartsLineChart
-          className="h-full"
-          data={data}
-          config={analyticsConfig}
-          xDataKey="time"
-          curveType="monotoneX"
-          animationType="left-to-right"
-          enableHoverHighlight={series.length > 1}
-          isLoading={isLoading}
-        >
-          {series.map((dataKey) => (
-            <EChartsLineChart.Line key={dataKey} dataKey={dataKey} strokeWidth={1.5}>
-              <EChartsLineChart.ActiveDot variant="colored-border" />
-            </EChartsLineChart.Line>
-          ))}
-          {showAxis ? (
-            <>
-              <EChartsLineChart.Grid />
-              <EChartsLineChart.YAxis
-                hideDots
-                tickFormatter={(value) => `${formatMetric(value)} ${axisUnit}`}
-              />
-            </>
-          ) : null}
-          <EChartsLineChart.Tooltip variant="frosted-glass" roundness="lg" cursor />
-        </EChartsLineChart>
+        {success ? (
+          <div className="grid h-full place-items-center px-4 pb-4 text-center">
+            <div>
+              <div className="mx-auto grid size-10 place-items-center rounded-full bg-primary/10 text-primary">
+                <ShieldCheckIcon className="size-5" />
+              </div>
+              <p className="mt-2 text-xs font-medium text-card-foreground">No service outages</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Every requested fixed load remains served so far.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <EChartsLineChart
+            className="h-full"
+            data={data}
+            config={analyticsConfig}
+            xDataKey="time"
+            curveType="monotoneX"
+            animationType="left-to-right"
+            enableHoverHighlight={series.length > 1}
+            isLoading={isLoading}
+          >
+            {series.map((dataKey) => (
+              <EChartsLineChart.Line key={dataKey} dataKey={dataKey} strokeWidth={1.5}>
+                <EChartsLineChart.ActiveDot variant="colored-border" />
+              </EChartsLineChart.Line>
+            ))}
+            {showAxis ? (
+              <>
+                <EChartsLineChart.Grid />
+                <EChartsLineChart.YAxis
+                  hideDots
+                  tickFormatter={(value) => `${formatMetric(value)} ${axisUnit}`}
+                />
+              </>
+            ) : null}
+            <EChartsLineChart.Tooltip variant="frosted-glass" roundness="lg" cursor />
+          </EChartsLineChart>
+        )}
       </div>
     </article>
   );

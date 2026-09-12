@@ -1,5 +1,11 @@
 import { Button } from "@getficksd/ui/components/button";
-import { ChevronDownIcon, ChevronUpIcon, PauseIcon, PlayIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CircleDotDashedIcon,
+  PauseIcon,
+  PlayIcon,
+} from "lucide-react";
 import { useMemo, useRef, useState, type PointerEvent } from "react";
 
 import type { PlanRun, Scenario } from "@/lib/plan-run";
@@ -36,6 +42,12 @@ export function TimeRail({
   const data = useMemo(() => createTimeRailData(scenario, run), [run, scenario]);
   const cursorX = hourToX(currentHour);
   const deadlineHour = contractDeadlineHour(scenario);
+  const eventWindows = planEventWindows(scenario, run);
+  const activeEvents = activePlanEventsAt(currentHour, scenario, run);
+  const togglePlayback = () => {
+    if (!isPlaying && currentHour >= 24) onCurrentHourChange(0);
+    onPlayingChange(!isPlaying);
+  };
 
   if (!expanded) {
     return (
@@ -53,16 +65,24 @@ export function TimeRail({
             size="icon-xs"
             variant="ghost"
             aria-label={isPlaying ? "Pause replay" : "Start replay"}
-            onClick={() => onPlayingChange(!isPlaying)}
+            onClick={togglePlayback}
           >
             {isPlaying ? <PauseIcon /> : <PlayIcon />}
           </Button>
-          <span className="text-xs font-medium text-foreground">
-            {isPlaying ? "Replaying" : "Replay"}
+          <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <CircleDotDashedIcon
+              className={`size-3.5 ${isPlaying ? "animate-spin text-primary [animation-duration:3s] motion-reduce:animate-none" : "text-muted-foreground"}`}
+            />
+            24-hour plan
           </span>
           <span className="font-mono text-[10px] text-muted-foreground">
-            {formatOperatingTime(currentHour, scenario)}
+            {isPlaying ? "Playing" : "Paused"} · {formatOperatingTime(currentHour, scenario)}
           </span>
+          {activeEvents.length > 0 ? (
+            <span className="hidden truncate rounded-full bg-chart-5/15 px-2 py-1 text-[9px] font-medium text-chart-5 sm:block">
+              {activeEvents.map((event) => event.name).join(" · ")}
+            </span>
+          ) : null}
           <Button
             size="icon-xs"
             variant="ghost"
@@ -123,7 +143,7 @@ export function TimeRail({
               size="icon-xs"
               variant="ghost"
               aria-label={isPlaying ? "Pause replay" : "Start replay"}
-              onClick={() => onPlayingChange(!isPlaying)}
+              onClick={togglePlayback}
             >
               {isPlaying ? <PauseIcon /> : <PlayIcon />}
             </Button>
@@ -133,10 +153,10 @@ export function TimeRail({
           </div>
           <div>
             <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              {run ? "Scheduled output" : "Demand forecast"}
+              24-hour plan replay
             </p>
             <p className="mt-0.5 hidden text-[10px] text-muted-foreground sm:block">
-              {formatOperatingDate(scenario)}
+              {isPlaying ? "Playing" : "Paused"} · {formatOperatingDate(scenario)}
             </p>
           </div>
         </div>
@@ -175,6 +195,23 @@ export function TimeRail({
                 strokeWidth="1"
                 vectorEffect="non-scaling-stroke"
               />
+            ))}
+
+            {eventWindows.map((event) => (
+              <rect
+                key={event.id}
+                x={hourToX(event.startHour)}
+                y="10"
+                width={Math.max(2, hourToX(event.endHour) - hourToX(event.startHour))}
+                height="7"
+                rx="3.5"
+                fill="var(--chart-5)"
+                fillOpacity={
+                  activeEvents.some((activeEvent) => activeEvent.id === event.id) ? 0.7 : 0.22
+                }
+              >
+                <title>{event.name}</title>
+              </rect>
             ))}
 
             <path d={areaPath(data.solar, 18, 86)} fill="var(--chart-1)" fillOpacity="0.08" />
@@ -238,7 +275,7 @@ export function TimeRail({
             className="pointer-events-none absolute top-[19px] -translate-x-1/2 font-mono text-[9px] font-medium text-foreground"
             style={{ left: `${(currentHour / 24) * 100}%` }}
           >
-            NOW
+            PLAN TIME
           </span>
           <span
             className={`pointer-events-none absolute bottom-1 whitespace-nowrap font-mono text-[8px] uppercase tracking-wide text-chart-2 ${deadlineHour >= 22 ? "-translate-x-full" : "-translate-x-1/2"}`}
@@ -279,9 +316,14 @@ function createTimeRailData(scenario?: Scenario, run?: PlanRun) {
 
 export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRun) {
   const intervalCount = run?.intervals.length ?? scenario?.horizon.interval_count ?? 0;
-  const index =
-    intervalCount > 0 ? clamp(Math.floor((hour / 24) * intervalCount), 0, intervalCount - 1) : 0;
+  const position = intervalCount > 0 ? clamp((hour / 24) * intervalCount, 0, intervalCount - 1) : 0;
+  const index = Math.floor(position);
+  const nextIndex = Math.min(index + 1, Math.max(0, intervalCount - 1));
+  const progress = position - index;
   const interval = run?.intervals[index];
+  const nextInterval = run?.intervals[nextIndex];
+  const blend = (current: number | undefined, next: number | undefined) =>
+    interpolate(current ?? next ?? 0, next ?? current ?? 0, progress);
   const solar = assetByType(scenario, "solar");
   const wind = assetByType(scenario, "wind");
   const battery = assetByType(scenario, "battery");
@@ -290,28 +332,54 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
   const water = serviceByMode(scenario, "shiftable");
   const homes = serviceByMode(scenario, "curtailable");
   const solarOutput = interval?.renewables.find((item) => item.asset_id === solar?.id)?.used_kw;
+  const nextSolarOutput = nextInterval?.renewables.find(
+    (item) => item.asset_id === solar?.id,
+  )?.used_kw;
   const windOutput = interval?.renewables.find((item) => item.asset_id === wind?.id)?.used_kw;
+  const nextWindOutput = nextInterval?.renewables.find(
+    (item) => item.asset_id === wind?.id,
+  )?.used_kw;
   const batteryInterval = interval?.batteries.find((item) => item.asset_id === battery?.id);
+  const nextBatteryInterval = nextInterval?.batteries.find((item) => item.asset_id === battery?.id);
   const dieselInterval = interval?.generators.find((item) => item.asset_id === diesel?.id);
+  const nextDieselInterval = nextInterval?.generators.find((item) => item.asset_id === diesel?.id);
   const clinicDelivery = interval?.services.find((item) => item.service_id === clinic?.id);
+  const nextClinicDelivery = nextInterval?.services.find((item) => item.service_id === clinic?.id);
   const waterDelivery = interval?.services.find((item) => item.service_id === water?.id);
+  const nextWaterDelivery = nextInterval?.services.find((item) => item.service_id === water?.id);
   const homesDelivery = interval?.services.find((item) => item.service_id === homes?.id);
+  const nextHomesDelivery = nextInterval?.services.find((item) => item.service_id === homes?.id);
   const waterContract = scenario?.contracts.find((item) => item.service_id === water?.id);
   const waterContractState = interval?.contracts.find(
     (item) => item.contract_id === waterContract?.id,
   );
   const initialBattery = initialAssetState(scenario, battery?.id)?.stored_energy_kwh ?? 0;
   const initialFuel = initialAssetState(scenario, diesel?.id)?.fuel_available_liters ?? 0;
-  const batteryEnergy = batteryInterval?.ending_energy_kwh ?? initialBattery;
+  const batteryEnergy = blend(
+    batteryInterval?.ending_energy_kwh ?? initialBattery,
+    nextBatteryInterval?.ending_energy_kwh ?? initialBattery,
+  );
   const batteryCapacity = battery?.capacity_kwh ?? 0;
   const serviceDemand = interval
-    ? interval.services.reduce((total, item) => total + item.requested_kw, 0)
-    : signalValue(scenario, "service_demand", index);
+    ? blend(
+        interval.services.reduce((total, item) => total + item.requested_kw, 0),
+        nextInterval?.services.reduce((total, item) => total + item.requested_kw, 0),
+      )
+    : interpolatedSignalValue(scenario, "service_demand", index, nextIndex, progress);
   const servedPower = interval
-    ? interval.services.reduce((total, item) => total + item.delivered_kw, 0)
+    ? blend(
+        interval.services.reduce((total, item) => total + item.delivered_kw, 0),
+        nextInterval?.services.reduce((total, item) => total + item.delivered_kw, 0),
+      )
     : serviceDemand;
   const deferredPower = interval
-    ? interval.services.reduce((total, item) => total + item.deferred_kw + item.unserved_kw, 0)
+    ? blend(
+        interval.services.reduce((total, item) => total + item.deferred_kw + item.unserved_kw, 0),
+        nextInterval?.services.reduce(
+          (total, item) => total + item.deferred_kw + item.unserved_kw,
+          0,
+        ),
+      )
     : 0;
   const renewableOutputByAsset = Object.fromEntries(
     (scenario?.site.assets ?? [])
@@ -319,8 +387,12 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
       .map((asset) => [
         asset.id,
         round(
-          interval?.renewables.find((item) => item.asset_id === asset.id)?.used_kw ??
-            signalValue(scenario, "renewable_availability", index, asset.id),
+          blend(
+            interval?.renewables.find((item) => item.asset_id === asset.id)?.used_kw ??
+              signalValue(scenario, "renewable_availability", index, asset.id),
+            nextInterval?.renewables.find((item) => item.asset_id === asset.id)?.used_kw ??
+              signalValue(scenario, "renewable_availability", nextIndex, asset.id),
+          ),
         ),
       ]),
   );
@@ -329,17 +401,21 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
       .filter((asset) => asset.type === "battery")
       .map((asset) => {
         const dispatch = interval?.batteries.find((item) => item.asset_id === asset.id);
-        const energy =
-          dispatch?.ending_energy_kwh ??
-          initialAssetState(scenario, asset.id)?.stored_energy_kwh ??
-          0;
+        const nextDispatch = nextInterval?.batteries.find((item) => item.asset_id === asset.id);
+        const initialEnergy = initialAssetState(scenario, asset.id)?.stored_energy_kwh ?? 0;
+        const energy = blend(
+          dispatch?.ending_energy_kwh ?? initialEnergy,
+          nextDispatch?.ending_energy_kwh ?? initialEnergy,
+        );
         const capacity = asset.capacity_kwh ?? 0;
         return [
           asset.id,
           {
             energyKwh: round(energy),
             capacityKwh: round(capacity),
-            percent: capacity > 0 ? Math.round((energy / capacity) * 100) : 0,
+            percent: capacity > 0 ? round((energy / capacity) * 100) : 0,
+            chargeKw: round(blend(dispatch?.charge_kw, nextDispatch?.charge_kw)),
+            dischargeKw: round(blend(dispatch?.discharge_kw, nextDispatch?.discharge_kw)),
           },
         ];
       }),
@@ -349,16 +425,21 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
       .filter((asset) => asset.type === "diesel")
       .map((asset) => {
         const dispatch = interval?.generators.find((item) => item.asset_id === asset.id);
+        const nextDispatch = nextInterval?.generators.find((item) => item.asset_id === asset.id);
+        const outputKw = blend(dispatch?.output_kw, nextDispatch?.output_kw);
         return [
           asset.id,
           {
-            running: dispatch?.running ?? false,
-            outputKw: round(dispatch?.output_kw ?? 0),
+            running: outputKw > 0.05,
+            outputKw: round(outputKw),
             capacityKw: round(asset.maximum_output_kw ?? 0),
             fuelLiters: round(
-              dispatch?.fuel_remaining_liters ??
-                initialAssetState(scenario, asset.id)?.fuel_available_liters ??
-                0,
+              blend(
+                dispatch?.fuel_remaining_liters ??
+                  initialAssetState(scenario, asset.id)?.fuel_available_liters,
+                nextDispatch?.fuel_remaining_liters ??
+                  initialAssetState(scenario, asset.id)?.fuel_available_liters,
+              ),
             ),
           },
         ];
@@ -367,16 +448,28 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
   const servicesByID = Object.fromEntries(
     (scenario?.site.services ?? []).map((service) => {
       const delivery = interval?.services.find((item) => item.service_id === service.id);
+      const nextDelivery = nextInterval?.services.find((item) => item.service_id === service.id);
       return [
         service.id,
         {
           requestedKw: round(
-            delivery?.requested_kw ?? demandForService(scenario, service.id, index),
+            blend(
+              delivery?.requested_kw ?? demandForService(scenario, service.id, index),
+              nextDelivery?.requested_kw ?? demandForService(scenario, service.id, nextIndex),
+            ),
           ),
           deliveredKw: round(
-            delivery?.delivered_kw ?? demandForService(scenario, service.id, index),
+            blend(
+              delivery?.delivered_kw ?? demandForService(scenario, service.id, index),
+              nextDelivery?.delivered_kw ?? demandForService(scenario, service.id, nextIndex),
+            ),
           ),
-          deferredKw: round((delivery?.deferred_kw ?? 0) + (delivery?.unserved_kw ?? 0)),
+          deferredKw: round(
+            blend(
+              (delivery?.deferred_kw ?? 0) + (delivery?.unserved_kw ?? 0),
+              (nextDelivery?.deferred_kw ?? 0) + (nextDelivery?.unserved_kw ?? 0),
+            ),
+          ),
         },
       ];
     }),
@@ -389,30 +482,58 @@ export function operatingStateAt(hour: number, scenario?: Scenario, run?: PlanRu
   );
   return {
     solarKw: round(
-      solarOutput ?? signalValue(scenario, "renewable_availability", index, solar?.id),
+      blend(
+        solarOutput ?? signalValue(scenario, "renewable_availability", index, solar?.id),
+        nextSolarOutput ?? signalValue(scenario, "renewable_availability", nextIndex, solar?.id),
+      ),
     ),
-    windKw: round(windOutput ?? signalValue(scenario, "renewable_availability", index, wind?.id)),
+    windKw: round(
+      blend(
+        windOutput ?? signalValue(scenario, "renewable_availability", index, wind?.id),
+        nextWindOutput ?? signalValue(scenario, "renewable_availability", nextIndex, wind?.id),
+      ),
+    ),
     demandKw: round(serviceDemand),
     servedKw: round(servedPower),
     deferredKw: round(deferredPower),
-    batteryPercent: batteryCapacity > 0 ? Math.round((batteryEnergy / batteryCapacity) * 100) : 0,
+    batteryPercent: batteryCapacity > 0 ? round((batteryEnergy / batteryCapacity) * 100) : 0,
     batteryEnergyKwh: round(batteryEnergy),
     batteryCapacityKwh: round(batteryCapacity),
-    dieselOn: dieselInterval?.running ?? false,
-    dieselOutputKw: round(dieselInterval?.output_kw ?? 0),
+    dieselOn: blend(dieselInterval?.output_kw, nextDieselInterval?.output_kw) > 0.05,
+    dieselOutputKw: round(blend(dieselInterval?.output_kw, nextDieselInterval?.output_kw)),
     dieselCapacityKw: round(diesel?.maximum_output_kw ?? 0),
-    dieselFuelLiters: round(dieselInterval?.fuel_remaining_liters ?? initialFuel),
-    clinicDeliveredKw: round(
-      clinicDelivery?.delivered_kw ?? demandForService(scenario, clinic?.id, index),
+    dieselFuelLiters: round(
+      blend(
+        dieselInterval?.fuel_remaining_liters ?? initialFuel,
+        nextDieselInterval?.fuel_remaining_liters ?? initialFuel,
+      ),
     ),
-    waterDeliveredKw: round(waterDelivery?.delivered_kw ?? 0),
+    clinicDeliveredKw: round(
+      blend(
+        clinicDelivery?.delivered_kw ?? demandForService(scenario, clinic?.id, index),
+        nextClinicDelivery?.delivered_kw ?? demandForService(scenario, clinic?.id, nextIndex),
+      ),
+    ),
+    waterDeliveredKw: round(blend(waterDelivery?.delivered_kw, nextWaterDelivery?.delivered_kw)),
     waterContractStatus: waterContractState?.status,
     waterRuntimeRemainingMinutes: waterContractState?.remaining_runtime_minutes ?? 0,
     homesDeliveredKw: round(
-      homesDelivery?.delivered_kw ?? demandForService(scenario, homes?.id, index),
+      blend(
+        homesDelivery?.delivered_kw ?? demandForService(scenario, homes?.id, index),
+        nextHomesDelivery?.delivered_kw ?? demandForService(scenario, homes?.id, nextIndex),
+      ),
     ),
-    homesDeferredKw: round((homesDelivery?.deferred_kw ?? 0) + (homesDelivery?.unserved_kw ?? 0)),
-    homesDeferred: (homesDelivery?.deferred_kw ?? 0) + (homesDelivery?.unserved_kw ?? 0) > 0.001,
+    homesDeferredKw: round(
+      blend(
+        (homesDelivery?.deferred_kw ?? 0) + (homesDelivery?.unserved_kw ?? 0),
+        (nextHomesDelivery?.deferred_kw ?? 0) + (nextHomesDelivery?.unserved_kw ?? 0),
+      ),
+    ),
+    homesDeferred:
+      blend(
+        (homesDelivery?.deferred_kw ?? 0) + (homesDelivery?.unserved_kw ?? 0),
+        (nextHomesDelivery?.deferred_kw ?? 0) + (nextHomesDelivery?.unserved_kw ?? 0),
+      ) > 0.001,
     contractAtRisk:
       interval?.contracts.some(
         (contract) => contract.status === "at_risk" || contract.status === "breached",
@@ -434,6 +555,21 @@ function signalValue(
   return (scenario?.signals ?? [])
     .filter((signal) => signal.kind === kind && (!assetId || signal.asset_id === assetId))
     .reduce((total, signal) => total + (signal.values[index] ?? 0), 0);
+}
+
+function interpolatedSignalValue(
+  scenario: Scenario | undefined,
+  kind: Scenario["signals"][number]["kind"],
+  index: number,
+  nextIndex: number,
+  progress: number,
+  assetId?: string,
+) {
+  return interpolate(
+    signalValue(scenario, kind, index, assetId),
+    signalValue(scenario, kind, nextIndex, assetId),
+    progress,
+  );
 }
 
 function demandForService(
@@ -493,6 +629,36 @@ function contractDeadlineHour(scenario?: Scenario) {
   return clamp(elapsed, 0, 24);
 }
 
+type PlanEventWindow = Scenario["events"][number] & {
+  startHour: number;
+  endHour: number;
+};
+
+function planEventWindows(scenario?: Scenario, run?: PlanRun): PlanEventWindow[] {
+  if (!scenario || !run) return [];
+  const activeEventIDs = new Set(run.active_event_ids);
+  const horizonStart = new Date(scenario.horizon.starts_at).getTime();
+  const intervalHours = scenario.horizon.interval_minutes / 60;
+
+  return scenario.events.flatMap((event) => {
+    if (!activeEventIDs.has(event.id)) return [];
+    const start = event.start ?? event.scheduled_at;
+    const end = event.end ?? event.delayed_until;
+    if (!start) return [];
+    const startHour = clamp((new Date(start).getTime() - horizonStart) / 3_600_000, 0, 24);
+    const endHour = end
+      ? clamp((new Date(end).getTime() - horizonStart) / 3_600_000, startHour, 24)
+      : Math.min(24, startHour + intervalHours);
+    return [{ ...event, startHour, endHour: Math.max(startHour + 0.01, endHour) }];
+  });
+}
+
+export function activePlanEventsAt(hour: number, scenario?: Scenario, run?: PlanRun) {
+  return planEventWindows(scenario, run).filter(
+    (event) => hour >= event.startHour && hour < event.endHour,
+  );
+}
+
 function areaPath(values: number[], top: number, bottom: number) {
   const points = values.map((value, index) => {
     const x = PLOT_START + (index / (values.length - 1)) * PLOT_WIDTH;
@@ -516,7 +682,7 @@ function hourToX(hour: number) {
   return PLOT_START + (hour / 24) * PLOT_WIDTH;
 }
 
-function formatOperatingTime(hour: number, scenario?: Scenario) {
+export function formatOperatingTime(hour: number, scenario?: Scenario) {
   const startsAt = scenario?.horizon.starts_at;
   if (!startsAt) {
     const normalizedMinutes = Math.round(hour * 60);
@@ -546,6 +712,10 @@ function formatOperatingDate(scenario?: Scenario) {
 
 function round(value: number) {
   return Math.round(value * 10) / 10;
+}
+
+function interpolate(start: number, end: number, progress: number) {
+  return start + (end - start) * progress;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {

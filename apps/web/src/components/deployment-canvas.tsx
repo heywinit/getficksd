@@ -7,7 +7,15 @@ import {
   ContextMenuTrigger,
 } from "@getficksd/ui/components/context-menu";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@getficksd/ui/components/tooltip";
+import {
   BatteryChargingIcon,
+  CircleDotDashedIcon,
+  Clock3Icon,
   CrossIcon,
   DropletsIcon,
   FuelIcon,
@@ -42,7 +50,12 @@ import {
 } from "react";
 import { toast } from "sonner";
 
-import { operatingStateAt, TimeRail } from "@/components/time-rail";
+import {
+  activePlanEventsAt,
+  formatOperatingTime,
+  operatingStateAt,
+  TimeRail,
+} from "@/components/time-rail";
 import type { GridConnection, PlanRun, Scenario } from "@/lib/plan-run";
 
 const GRID_SIZE = 16;
@@ -387,6 +400,8 @@ export function DeploymentCanvas({
   const isPlaying = playing ?? internalPlaying;
   const setIsPlaying = onPlayingChange ?? setInternalPlaying;
   const canvasSize = useMemo(() => worldSize(nodes), [nodes]);
+  const playbackHourRef = useRef(currentHour);
+  const autoPlayedRunRef = useRef<string | null>(null);
 
   useEffect(() => {
     const nextNodes = createCanvasNodes(scenario);
@@ -410,6 +425,26 @@ export function DeploymentCanvas({
   useEffect(() => {
     if (replayToken > 0) setCurrentHour(0);
   }, [replayToken]);
+
+  useEffect(() => {
+    playbackHourRef.current = currentHour;
+  }, [currentHour]);
+
+  useEffect(() => {
+    if (
+      !run ||
+      run.status !== "complete" ||
+      run.intervals.length === 0 ||
+      autoPlayedRunRef.current === run.id
+    ) {
+      return;
+    }
+    autoPlayedRunRef.current = run.id;
+    playbackHourRef.current = 0;
+    setCurrentHour(0);
+    setIsTimelineExpanded(true);
+    setIsPlaying(true);
+  }, [run, setCurrentHour, setIsPlaying]);
 
   const fitView = useCallback(() => {
     const bounds = canvasRef.current?.getBoundingClientRect();
@@ -475,11 +510,29 @@ export function DeploymentCanvas({
 
   useEffect(() => {
     if (!run || !isPlaying) return;
-    const timer = window.setInterval(() => {
-      setCurrentHour((hour) => (hour >= 24 ? 0 : hour + 1 / 60));
-    }, 100);
-    return () => window.clearInterval(timer);
-  }, [isPlaying, run]);
+    let animationFrame = 0;
+    let previousFrame = performance.now();
+    let lastRender = previousFrame;
+
+    const animate = (now: number) => {
+      const elapsed = Math.min(now - previousFrame, 250);
+      previousFrame = now;
+      playbackHourRef.current = Math.min(24, playbackHourRef.current + elapsed / 6_000);
+
+      if (now - lastRender >= 1000 / 30 || playbackHourRef.current >= 24) {
+        lastRender = now;
+        setCurrentHour(playbackHourRef.current);
+      }
+      if (playbackHourRef.current >= 24) {
+        setIsPlaying(false);
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(animate);
+    };
+
+    animationFrame = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [isPlaying, run, setCurrentHour, setIsPlaying]);
 
   const operatingState = useMemo(
     () => operatingStateAt(currentHour, scenario, run),
@@ -491,6 +544,7 @@ export function DeploymentCanvas({
   );
   const endpointLookup = useMemo(() => endpointNodeLookup(sceneNodes), [sceneNodes]);
   const connections = scenario?.site.connections ?? [];
+  const activeEvents = activePlanEventsAt(currentHour, scenario, run);
   const startCanvasDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -684,6 +738,53 @@ export function DeploymentCanvas({
       onPointerCancel={endDrag}
     >
       <div
+        className="absolute left-4 top-16 z-20 max-w-[calc(100%-2rem)] rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-2xl backdrop-blur sm:left-1/2 sm:top-4 sm:max-w-[22rem] sm:-translate-x-1/2"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center gap-2">
+          {run ? (
+            <CircleDotDashedIcon
+              className={`size-4 ${isPlaying ? "animate-spin text-primary [animation-duration:3s] motion-reduce:animate-none" : "text-muted-foreground"}`}
+            />
+          ) : (
+            <Clock3Icon className="size-4 text-muted-foreground" />
+          )}
+          <span className="text-xs font-semibold text-foreground">
+            {run ? "24-hour plan replay" : "Static grid model"}
+          </span>
+          {run ? (
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ${isPlaying ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}
+            >
+              {isPlaying ? "Playing" : "Paused"}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-0.5 text-[10px] text-muted-foreground">
+          {run
+            ? `${formatOperatingTime(currentHour, scenario)} plan time · Values interpolate between 15-minute steps · Not live telemetry`
+            : "Run a plan to animate the full operating day."}
+        </p>
+        {activeEvents.length > 0 || operatingState.deferredKw > 0.001 ? (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {activeEvents.map((event) => (
+              <span
+                key={event.id}
+                className="rounded-full bg-chart-5/15 px-2 py-0.5 text-[9px] font-medium text-chart-5"
+              >
+                {event.name} active
+              </span>
+            ))}
+            {operatingState.deferredKw > 0.001 ? (
+              <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-[9px] font-medium text-destructive">
+                {operatingState.deferredKw} kW deferred
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div
         className="absolute right-4 top-4 z-20 flex rounded-lg border border-border bg-popover/95 p-1 shadow-2xl backdrop-blur"
         role="group"
         aria-label="Canvas view"
@@ -745,11 +846,9 @@ export function DeploymentCanvas({
             const to = endpointLookup.get(connection.target_id);
             if (!from || !to) return null;
             const emphasized = connectionIsEmphasized(from, to, view);
-            const dieselActive =
-              from.assetType === "diesel" &&
-              Boolean(
-                from.resourceId && operatingState.generatorsByAsset[from.resourceId]?.running,
-              );
+            const flowKw = connectionFlowKw(from, to, operatingState);
+            const activeFlow = flowKw > 0.05;
+            const flowAccent = accentForNode(from.kind === "controller" ? to : from);
             return (
               <g key={connection.id}>
                 <path
@@ -758,24 +857,34 @@ export function DeploymentCanvas({
                   stroke={
                     selectedConnection === connection.id
                       ? "var(--primary)"
-                      : dieselActive
-                        ? "var(--chart-4)"
+                      : activeFlow
+                        ? flowAccent
                         : "var(--muted-foreground)"
                   }
                   strokeOpacity={
                     selectedConnection === connection.id
                       ? 1
                       : emphasized
-                        ? dieselActive
+                        ? activeFlow
                           ? 1
                           : 0.7
                         : 0.12
                   }
-                  strokeWidth={selectedConnection === connection.id ? 3 : 1.5}
-                  strokeDasharray={dieselActive ? undefined : "5 5"}
+                  strokeWidth={selectedConnection === connection.id ? 3 : activeFlow ? 2.5 : 1.5}
+                  strokeDasharray={activeFlow ? "3 8" : "5 5"}
                   markerEnd="url(#canvas-arrow)"
                   pointerEvents="none"
-                />
+                >
+                  {activeFlow && isPlaying ? (
+                    <animate
+                      attributeName="stroke-dashoffset"
+                      from="22"
+                      to="0"
+                      dur="0.9s"
+                      repeatCount="indefinite"
+                    />
+                  ) : null}
+                </path>
                 <path
                   d={connectionPath(from, to)}
                   fill="none"
@@ -1009,7 +1118,7 @@ function ServiceCard({
       <ContextMenuTrigger
         render={
           <article
-            className={`group absolute flex cursor-grab flex-col overflow-visible border border-border bg-card text-left outline-none transition-[box-shadow,opacity,transform] active:cursor-grabbing ${radius} ${selected ? "ring-1 ring-foreground/20" : "hover:-translate-y-0.5"} ${node.dimmed ? "opacity-50" : "opacity-100"}`}
+            className={`group absolute flex cursor-grab flex-col overflow-visible border border-border bg-card text-left outline-none transition-[box-shadow,opacity,transform] active:cursor-grabbing ${radius} ${selected ? "ring-1 ring-foreground/20" : "hover:-translate-y-0.5"} ${node.statusTone === "warning" ? "ring-2 ring-destructive/40" : node.statusTone === "active" ? "ring-2 ring-chart-4/40" : ""} ${node.dimmed ? "opacity-50" : "opacity-100"}`}
             style={{
               width: node.width,
               height: node.height,
@@ -1037,11 +1146,31 @@ function ServiceCard({
           >
             <Icon className={compact ? "size-4" : "size-5"} />
           </span>
-          <span className="min-w-0">
+          <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-card-foreground">
               {node.title}
             </span>
           </span>
+          {resourceTarget && onEdit ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="shrink-0 text-muted-foreground opacity-80 hover:text-foreground group-hover:opacity-100"
+              aria-label={`Edit ${node.title}`}
+              title={`Edit ${node.title}`}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onEdit(resourceTarget);
+              }}
+            >
+              <PencilIcon />
+            </Button>
+          ) : null}
         </span>
 
         <span className={`relative block min-h-0 flex-1 ${compact ? "px-3 pt-1.5" : "px-4 pt-3"}`}>
@@ -1060,7 +1189,7 @@ function ServiceCard({
           ) : (
             <>
               <NodeVisual node={node} accent={accent} />
-              <StatusPill node={node} accent={accent} compact={compact} />
+              <StatusPill node={node} compact={compact} />
             </>
           )}
         </span>
@@ -1150,28 +1279,47 @@ function ServiceCard({
   );
 }
 
-function StatusPill({
-  node,
-  accent,
-  compact,
-}: {
-  node: CanvasNode;
-  accent: string;
-  compact: boolean;
-}) {
+function StatusPill({ node, compact }: { node: CanvasNode; compact: boolean }) {
+  const statusColor =
+    node.statusTone === "warning"
+      ? "var(--destructive)"
+      : node.statusTone === "active"
+        ? "var(--chart-4)"
+        : "var(--primary)";
+
   return (
-    <span
-      className={`absolute z-10 flex max-w-[172px] items-center gap-1.5 truncate rounded-full bg-muted px-2 py-1 text-[9px] ${compact ? "bottom-2.5 left-3" : "bottom-3 left-4"} ${node.statusTone === "warning" ? "text-destructive" : "text-muted-foreground"}`}
-    >
-      <span
-        className="size-1.5 shrink-0 rounded-full"
-        style={{
-          backgroundColor: node.statusTone === "warning" ? "var(--destructive)" : accent,
-        }}
-      />
-      <span className="truncate">{node.status}</span>
-    </span>
+    <TooltipProvider delay={200}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={`absolute z-10 flex max-w-[172px] items-center gap-1.5 truncate rounded-full bg-muted px-2 py-1 text-[9px] ${compact ? "bottom-2.5 left-3" : "bottom-3 left-4"} ${node.statusTone === "warning" ? "text-destructive" : "text-muted-foreground"}`}
+            />
+          }
+        >
+          <span
+            className="size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: statusColor }}
+          />
+          <span className="truncate">{node.status}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{statusExplanation(node)}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
+}
+
+function statusExplanation(node: CanvasNode) {
+  if (node.statusTone === "warning") {
+    return "Red means that demand is deferred or the plan needs operator attention.";
+  }
+  if (node.statusTone === "active") {
+    return "Amber means that this resource is active at the selected plan time.";
+  }
+  if (node.kind === "service") {
+    return "Green means that this service receives its scheduled power and remains within the plan.";
+  }
+  return "Green means that this resource operates normally at the selected plan time.";
 }
 
 function DieselIntake({
@@ -1319,6 +1467,30 @@ function canEndConnection(node: CanvasNode) {
     node.kind === "service" ||
     (node.kind === "asset" && node.assetType === "battery")
   );
+}
+
+function connectionFlowKw(
+  from: CanvasNode,
+  to: CanvasNode,
+  state: ReturnType<typeof operatingStateAt>,
+) {
+  if (from.kind === "controller" && to.kind === "service" && to.resourceId) {
+    return state.servicesByID[to.resourceId]?.deliveredKw ?? 0;
+  }
+  if (from.kind === "controller" && to.assetType === "battery" && to.resourceId) {
+    return state.batteriesByAsset[to.resourceId]?.chargeKw ?? 0;
+  }
+  if (from.kind !== "asset" || !from.resourceId) return 0;
+  if (from.assetType === "solar" || from.assetType === "wind") {
+    return state.renewableOutputByAsset[from.resourceId] ?? 0;
+  }
+  if (from.assetType === "diesel") {
+    return state.generatorsByAsset[from.resourceId]?.outputKw ?? 0;
+  }
+  if (from.assetType === "battery") {
+    return state.batteriesByAsset[from.resourceId]?.dischargeKw ?? 0;
+  }
+  return 0;
 }
 
 function connectionProblem(

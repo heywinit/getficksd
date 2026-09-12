@@ -127,6 +127,13 @@ export function GridActions({
     setEditTarget(target);
   }
 
+  const editedAsset =
+    editTarget?.kind === "asset"
+      ? editDraft?.site.assets.find((asset) => asset.id === editTarget.id)
+      : undefined;
+  const isRenewableEditor = editedAsset?.type === "solar" || editedAsset?.type === "wind";
+  const isDieselEditor = editedAsset?.type === "diesel";
+
   useEffect(() => {
     if (!editRequest || !scenario) return;
     setEditDraft(structuredClone(scenario));
@@ -219,7 +226,11 @@ export function GridActions({
           }
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent
+          className={
+            isDieselEditor ? "sm:max-w-3xl" : isRenewableEditor ? "sm:max-w-md" : "sm:max-w-lg"
+          }
+        >
           <DialogHeader>
             <DialogTitle>Edit {editTarget ? targetLabel(editTarget.kind) : "item"}</DialogTitle>
             <DialogDescription>
@@ -343,40 +354,232 @@ function ItemEditor({
         const item = next.site.assets.find((candidate) => candidate.id === asset.id);
         if (item) (item[field] as typeof value) = value;
       });
+    if (asset.type === "solar" || asset.type === "wind") {
+      const capacity = asset.capacity_kw ?? 0.01;
+      const output = average(signal?.values ?? []);
+      const updateCapacity = (value: number) =>
+        update((next) => {
+          const item = next.site.assets.find((candidate) => candidate.id === asset.id);
+          if (item) item.capacity_kw = value;
+          const forecast = next.signals.find((candidate) => candidate.id === signal?.id);
+          if (forecast) {
+            forecast.values = forecast.values.map((currentOutput) =>
+              Math.min(currentOutput, value),
+            );
+          }
+        });
+      const updateOutput = (value: number) =>
+        update((next) => {
+          const item = next.signals.find((candidate) => candidate.id === signal?.id);
+          if (item) item.values = item.values.map(() => value);
+        });
+
+      return (
+        <div className="grid gap-4 py-1">
+          <TextField
+            label="Name"
+            value={asset.name}
+            onChange={(value) => setAsset("name", value)}
+          />
+          <div className="grid gap-3 rounded-xl border border-border bg-card p-3">
+            <div>
+              <p className="text-sm font-medium">Quick output settings</p>
+              <p className="text-xs text-muted-foreground">
+                Set the installed capacity and the forecast output for every interval.
+              </p>
+            </div>
+            <RangeNumberField
+              label="Installed capacity"
+              value={capacity}
+              min={0.01}
+              sliderMax={Math.max(500, capacity)}
+              step={1}
+              unit="kW"
+              onChange={updateCapacity}
+            />
+            <RangeNumberField
+              label="Forecast output"
+              value={output}
+              min={0}
+              inputMax={capacity}
+              sliderMax={capacity}
+              step={1}
+              unit="kW"
+              onChange={updateOutput}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (asset.type === "diesel") {
+      const fuelAvailable = state?.fuel_available_liters ?? 0;
+      const minimumOutput = asset.minimum_output_kw ?? 0;
+      const maximumOutput = asset.maximum_output_kw ?? 0.01;
+      const startupFuel = asset.startup_fuel_liters ?? 0;
+      const minimumRuntime = asset.minimum_runtime_minutes ?? 0;
+      const rampRate = asset.ramp_rate_kw_per_minute ?? 0.01;
+      const fuelCost = asset.fuel_cost_per_liter ?? 0;
+      const setFuelAvailable = (value: number) =>
+        update((next) => {
+          const item = next.initial_state.assets.find(
+            (candidate) => candidate.asset_id === asset.id,
+          );
+          if (item) item.fuel_available_liters = Math.max(0, value);
+        });
+
+      return (
+        <div className="grid max-h-[65svh] gap-4 overflow-y-auto py-1 pr-1">
+          <TextField
+            label="Name"
+            value={asset.name}
+            onChange={(value) => setAsset("name", value)}
+          />
+
+          <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">Fuel available</p>
+                <p className="text-2xl font-semibold tabular-nums">
+                  {formatNumber(fuelAvailable)} L
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1.5" aria-label="Add fuel">
+                {[25, 50, 100, 200].map((liters) => (
+                  <Button
+                    key={liters}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => setFuelAvailable(fuelAvailable + liters)}
+                  >
+                    +{liters} L
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <RangeNumberField
+              label="Fuel inventory"
+              value={fuelAvailable}
+              min={0}
+              sliderMax={Math.max(1_000, fuelAvailable)}
+              step={5}
+              inputStep={1}
+              unit="L"
+              onChange={setFuelAvailable}
+            />
+          </section>
+
+          <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
+            <div>
+              <p className="text-sm font-medium">Output range</p>
+              <p className="text-xs text-muted-foreground">
+                Set the stable operating floor and the generator limit.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <RangeNumberField
+                label="Minimum output"
+                value={minimumOutput}
+                min={0}
+                inputMax={maximumOutput}
+                sliderMax={maximumOutput}
+                step={1}
+                unit="kW"
+                onChange={(value) => setAsset("minimum_output_kw", value)}
+              />
+              <RangeNumberField
+                label="Maximum output"
+                value={maximumOutput}
+                min={0.01}
+                sliderMax={Math.max(500, maximumOutput)}
+                step={1}
+                unit="kW"
+                onChange={(value) => setAsset("maximum_output_kw", value)}
+              />
+            </div>
+          </section>
+
+          <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
+            <div>
+              <p className="text-sm font-medium">Generator behavior</p>
+              <p className="text-xs text-muted-foreground">
+                Tune how quickly the generator can start and change output.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <RangeNumberField
+                label="Startup fuel"
+                value={startupFuel}
+                min={0}
+                sliderMax={Math.max(10, startupFuel)}
+                step={0.1}
+                unit="L"
+                onChange={(value) => setAsset("startup_fuel_liters", value)}
+              />
+              <RangeNumberField
+                label="Minimum runtime"
+                value={minimumRuntime}
+                min={0}
+                sliderMax={Math.max(240, minimumRuntime)}
+                step={15}
+                unit="min"
+                onChange={(value) => setAsset("minimum_runtime_minutes", Math.round(value))}
+              />
+              <RangeNumberField
+                label="Ramp rate"
+                value={rampRate}
+                min={0.01}
+                sliderMax={Math.max(20, rampRate)}
+                step={0.1}
+                unit="kW/min"
+                onChange={(value) => setAsset("ramp_rate_kw_per_minute", value)}
+              />
+            </div>
+          </section>
+
+          <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
+            <div>
+              <p className="text-sm font-medium">Fuel economics</p>
+              <p className="text-xs text-muted-foreground">
+                The plan uses these values for cost and emissions estimates.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <NumberField
+                label="Fuel use (liters/kWh)"
+                value={asset.liters_per_kwh}
+                min={0.001}
+                step={0.001}
+                onChange={(value) => setAsset("liters_per_kwh", value)}
+              />
+              <RangeNumberField
+                label="Fuel cost"
+                value={fuelCost}
+                min={0}
+                sliderMax={Math.max(500, fuelCost)}
+                step={0.5}
+                inputStep={0.01}
+                unit={`${scenario.site.currency}/L`}
+                onChange={(value) => setAsset("fuel_cost_per_liter", value)}
+              />
+              <NumberField
+                label="Emissions (kg CO₂/liter)"
+                value={asset.emissions_kg_co2_per_liter}
+                min={0.01}
+                step={0.01}
+                onChange={(value) => setAsset("emissions_kg_co2_per_liter", value)}
+              />
+            </div>
+          </section>
+        </div>
+      );
+    }
+
     return (
       <div className="grid max-h-[60svh] gap-3 overflow-y-auto py-1 sm:grid-cols-2">
         <TextField label="Name" value={asset.name} onChange={(value) => setAsset("name", value)} />
-        {asset.type === "solar" || asset.type === "wind" ? (
-          <>
-            <NumberField
-              label="Capacity (kW)"
-              value={asset.capacity_kw}
-              min={0.01}
-              onChange={(value) =>
-                update((next) => {
-                  const item = next.site.assets.find((candidate) => candidate.id === asset.id);
-                  if (item) item.capacity_kw = value;
-                  const forecast = next.signals.find((candidate) => candidate.id === signal?.id);
-                  if (forecast) {
-                    forecast.values = forecast.values.map((output) => Math.min(output, value));
-                  }
-                })
-              }
-            />
-            <NumberField
-              label="Output for each interval (kW)"
-              value={average(signal?.values ?? [])}
-              min={0}
-              max={asset.capacity_kw}
-              onChange={(value) =>
-                update((next) => {
-                  const item = next.signals.find((candidate) => candidate.id === signal?.id);
-                  if (item) item.values = item.values.map(() => value);
-                })
-              }
-            />
-          </>
-        ) : null}
         {asset.type === "battery" ? (
           <>
             <NumberField
@@ -433,78 +636,6 @@ function ItemEditor({
               max={1}
               step={0.01}
               onChange={(value) => setAsset("discharge_efficiency", value)}
-            />
-          </>
-        ) : null}
-        {asset.type === "diesel" ? (
-          <>
-            <NumberField
-              label="Minimum stable output (kW)"
-              value={asset.minimum_output_kw}
-              min={0}
-              max={asset.maximum_output_kw}
-              onChange={(value) => setAsset("minimum_output_kw", value)}
-            />
-            <NumberField
-              label="Maximum output (kW)"
-              value={asset.maximum_output_kw}
-              min={0.01}
-              onChange={(value) => setAsset("maximum_output_kw", value)}
-            />
-            <NumberField
-              label="Fuel available (liters)"
-              value={state?.fuel_available_liters}
-              min={0}
-              onChange={(value) =>
-                update((next) => {
-                  const item = next.initial_state.assets.find(
-                    (candidate) => candidate.asset_id === asset.id,
-                  );
-                  if (item) item.fuel_available_liters = value;
-                })
-              }
-            />
-            <NumberField
-              label="Fuel use (liters/kWh)"
-              value={asset.liters_per_kwh}
-              min={0.001}
-              step={0.001}
-              onChange={(value) => setAsset("liters_per_kwh", value)}
-            />
-            <NumberField
-              label="Startup fuel (liters)"
-              value={asset.startup_fuel_liters}
-              min={0}
-              step={0.1}
-              onChange={(value) => setAsset("startup_fuel_liters", value)}
-            />
-            <NumberField
-              label="Minimum runtime (minutes)"
-              value={asset.minimum_runtime_minutes}
-              min={0}
-              step={15}
-              onChange={(value) => setAsset("minimum_runtime_minutes", Math.round(value))}
-            />
-            <NumberField
-              label="Ramp rate (kW/min)"
-              value={asset.ramp_rate_kw_per_minute}
-              min={0.01}
-              step={0.1}
-              onChange={(value) => setAsset("ramp_rate_kw_per_minute", value)}
-            />
-            <NumberField
-              label={`Fuel cost (${scenario.site.currency}/liter)`}
-              value={asset.fuel_cost_per_liter}
-              min={0}
-              step={0.01}
-              onChange={(value) => setAsset("fuel_cost_per_liter", value)}
-            />
-            <NumberField
-              label="Emissions (kg CO₂/liter)"
-              value={asset.emissions_kg_co2_per_liter}
-              min={0.01}
-              step={0.01}
-              onChange={(value) => setAsset("emissions_kg_co2_per_liter", value)}
             />
           </>
         ) : null}
@@ -796,6 +927,67 @@ function NumberField({
   );
 }
 
+function RangeNumberField({
+  label,
+  value,
+  onChange,
+  min,
+  sliderMax,
+  inputMax,
+  step,
+  inputStep,
+  unit,
+}: {
+  label: string;
+  value?: number;
+  onChange: (value: number) => void;
+  min: number;
+  sliderMax: number;
+  inputMax?: number;
+  step: number;
+  inputStep?: number;
+  unit: string;
+}) {
+  const currentValue = value ?? min;
+  const rangeValue = Math.min(Math.max(currentValue, min), sliderMax);
+
+  return (
+    <div className="grid gap-2 rounded-lg border border-border bg-background p-3">
+      <div className="flex items-center justify-between gap-3">
+        <label className="text-sm font-medium" htmlFor={`${fieldId(label)}-range`}>
+          {label}
+        </label>
+        <span className="text-sm font-semibold tabular-nums">
+          {formatNumber(currentValue)} {unit}
+        </span>
+      </div>
+      <input
+        id={`${fieldId(label)}-range`}
+        className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
+        type="range"
+        value={rangeValue}
+        min={min}
+        max={sliderMax}
+        step={step}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        Exact
+        <Input
+          className="h-8 min-w-0 flex-1 text-foreground"
+          type="number"
+          value={value ?? ""}
+          min={min}
+          max={inputMax}
+          step={inputStep ?? step}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <span className="shrink-0">{unit}</span>
+      </label>
+    </div>
+  );
+}
+
 function MissingItem() {
   return <p className="text-sm text-destructive">This item no longer exists.</p>;
 }
@@ -819,6 +1011,14 @@ function signalName(signal: Scenario["signals"][number], scenario: Scenario) {
 function average(values: number[]) {
   if (values.length === 0) return 0;
   return Math.round((values.reduce((total, value) => total + value, 0) / values.length) * 10) / 10;
+}
+
+function fieldId(label: string) {
+  return `grid-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 }
 
 function addToScenario(scenario: Scenario, kind: AddKind) {

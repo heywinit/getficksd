@@ -1,5 +1,6 @@
 import {
   ActivityIcon,
+  ArrowRightIcon,
   BatteryChargingIcon,
   CircleDollarSignIcon,
   CloudIcon,
@@ -88,16 +89,18 @@ export function PlanComparisonPanel({ scenario, run }: { scenario?: Scenario; ru
           <div className="flex items-center gap-2">
             <ShieldCheckIcon className="size-4 text-primary" />
             <h2 id="comparison-title" className="text-lg font-semibold tracking-tight">
-              Measured against baseline
+              Cost of disruption versus normal day
             </h2>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Candidate minus the normal-day plan, calculated across every dispatch interval.
           </p>
         </div>
-        <p className="font-mono text-[10px] text-muted-foreground">
-          {shortID(comparison.baseline_run_id)} → {shortID(comparison.candidate_run_id)}
-        </p>
+        <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+          <span>{shortID(comparison.baseline_run_id)}</span>
+          <ArrowRightIcon className="size-3" aria-hidden="true" />
+          <span>{shortID(comparison.candidate_run_id)}</span>
+        </div>
       </header>
 
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-6">

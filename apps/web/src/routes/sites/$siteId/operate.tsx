@@ -15,6 +15,7 @@ import { toast } from "sonner";
 
 import { AppHeader } from "@/components/app-header";
 import { OperationsAnalytics } from "@/components/operations-analytics";
+import { PlanBrief } from "@/components/plan-brief";
 import { ContractsWorkspace } from "@/components/contracts-workspace";
 import { PlanComparisonPanel } from "@/components/plan-comparison";
 import { GridActions, type GridEditTarget } from "@/components/grid-actions";
@@ -264,6 +265,16 @@ function HomeComponent() {
             onEditRequestHandled={() => setEditRequest(null)}
           />
         </section>
+        <PlanBrief
+          scenario={scenarioQuery.data}
+          run={latestRun}
+          currentHour={currentHour}
+          isPlaying={isPlaying}
+          onSelectHour={(hour) => {
+            setCurrentHour(hour);
+            setIsPlaying(false);
+          }}
+        />
         <ScenarioRunner
           scenarios={siteScenarios}
           scenario={scenarioQuery.data}
