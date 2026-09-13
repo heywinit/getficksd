@@ -69,7 +69,28 @@ func (s *Scheduler) planOptimized(ctx context.Context, p *preparedScenario, run 
 	if err := verifyOptimizerSolution(input, solution); err != nil {
 		return domain.PlanRun{}, fmt.Errorf("verify optimizer solution: %w", err)
 	}
-	return buildOptimizedRun(p, run, solution), nil
+	result := buildOptimizedRun(p, run, solution)
+	return s.attachNetworkValidation(ctx, input, solution, result), nil
+}
+
+func (s *Scheduler) attachNetworkValidation(ctx context.Context, input optimizerInput, solution optimizerSolution, result domain.PlanRun) domain.PlanRun {
+	if s.networkValidator != nil {
+		validation, validationErr := s.networkValidator.Validate(ctx, input, solution)
+		if validationErr != nil {
+			validation = unavailableNetworkValidation(validationErr)
+		}
+		validation.AssumedLossKWH = assumedNetworkLossKWH(result)
+		result.NetworkValidation = &validation
+	}
+	return result
+}
+
+func assumedNetworkLossKWH(run domain.PlanRun) float64 {
+	total := 0.0
+	for _, interval := range run.Intervals {
+		total += interval.LossesKW * interval.End.Sub(interval.Start).Hours()
+	}
+	return round6(total)
 }
 
 func buildOptimizedRun(p *preparedScenario, run domain.PlanRun, solution optimizerSolution) domain.PlanRun {

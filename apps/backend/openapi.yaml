@@ -1259,6 +1259,8 @@ components:
           $ref: "#/components/schemas/PlanSummary"
         optimization:
           $ref: "#/components/schemas/OptimizationInfo"
+        network_validation:
+          $ref: "#/components/schemas/NetworkValidation"
         comparison:
           $ref: "#/components/schemas/PlanComparison"
     PlanInterval:
@@ -1451,6 +1453,69 @@ components:
         solve_ms: { type: integer, minimum: 0 }
         used_fallback: { type: boolean }
         fallback_reason: { type: string }
+    NetworkViolation:
+      type: object
+      additionalProperties: false
+      required: [interval_index, kind, value, limit, message]
+      properties:
+        interval_index: { type: integer, minimum: 0 }
+        kind: { type: string }
+        element_id: { type: string }
+        value: { type: number }
+        limit: { type: number }
+        message: { type: string }
+    NetworkValidation:
+      type: object
+      additionalProperties: false
+      required:
+        - engine
+        - model_name
+        - status
+        - source
+        - assumptions
+        - checked_intervals
+        - converged_intervals
+        - checked_buses
+        - checked_lines
+        - components_checked
+        - min_voltage_pu
+        - min_voltage_interval
+        - max_voltage_pu
+        - max_line_loading_percent
+        - max_line_loading_interval
+        - calculated_loss_kwh
+        - assumed_loss_kwh
+        - validation_ms
+        - violations
+      properties:
+        engine: { type: string, const: pandapower }
+        model_name: { type: string }
+        status: { type: string, enum: [pass, violations, unavailable] }
+        source: { type: string, enum: [synthetic_default, provided_network] }
+        assumptions:
+          type: array
+          minItems: 1
+          items: { type: string }
+        checked_intervals: { type: integer, minimum: 0 }
+        converged_intervals: { type: integer, minimum: 0 }
+        checked_buses: { type: integer, minimum: 0 }
+        checked_lines: { type: integer, minimum: 0 }
+        components_checked: { type: integer, minimum: 0 }
+        min_voltage_pu: { type: number, minimum: 0 }
+        min_voltage_bus_id: { type: string }
+        min_voltage_interval: { type: integer, minimum: 0 }
+        max_voltage_pu: { type: number, minimum: 0 }
+        max_line_loading_percent: { type: number, minimum: 0 }
+        max_loaded_line_id: { type: string }
+        max_line_loading_interval: { type: integer, minimum: 0 }
+        calculated_loss_kwh: { type: number, minimum: 0 }
+        assumed_loss_kwh: { type: number, minimum: 0 }
+        validation_ms: { type: integer, minimum: 0 }
+        violations:
+          type: array
+          items:
+            $ref: "#/components/schemas/NetworkViolation"
+        error: { type: string }
     ComparisonMetric:
       type: object
       additionalProperties: false

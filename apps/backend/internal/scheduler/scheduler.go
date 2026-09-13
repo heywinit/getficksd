@@ -16,9 +16,10 @@ import (
 const epsilon = 0.000001
 
 type Scheduler struct {
-	now       func() time.Time
-	newID     func() (string, error)
-	optimizer Optimizer
+	now              func() time.Time
+	newID            func() (string, error)
+	optimizer        Optimizer
+	networkValidator NetworkValidator
 }
 
 type Option func(*Scheduler)
@@ -26,6 +27,12 @@ type Option func(*Scheduler)
 func WithOptimizer(optimizer Optimizer) Option {
 	return func(scheduler *Scheduler) {
 		scheduler.optimizer = optimizer
+	}
+}
+
+func WithNetworkValidator(validator NetworkValidator) Option {
+	return func(scheduler *Scheduler) {
+		scheduler.networkValidator = validator
 	}
 }
 

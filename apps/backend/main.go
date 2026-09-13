@@ -21,13 +21,16 @@ import (
 const version = "0.1.0"
 
 type config struct {
-	port             string
-	databasePath     string
-	allowedOrigins   map[string]struct{}
-	optimizerEnabled bool
-	optimizerPython  string
-	optimizerScript  string
-	optimizerTimeout time.Duration
+	port                     string
+	databasePath             string
+	allowedOrigins           map[string]struct{}
+	optimizerEnabled         bool
+	optimizerPython          string
+	optimizerScript          string
+	optimizerTimeout         time.Duration
+	networkValidationEnabled bool
+	networkValidationScript  string
+	networkValidationTimeout time.Duration
 }
 
 type app struct {
@@ -64,16 +67,26 @@ func main() {
 		log.Fatalf("Scenario seed failed: %v", err)
 	}
 
-	planner := scheduler.New()
+	plannerOptions := make([]scheduler.Option, 0, 2)
 	if cfg.optimizerEnabled {
 		optimizer, optimizerErr := scheduler.NewPythonOptimizer(cfg.optimizerPython, cfg.optimizerScript, cfg.optimizerTimeout)
 		if optimizerErr != nil {
 			log.Printf("MILP optimizer configuration failed; Wattson will use its heuristic: %v", optimizerErr)
 		} else {
-			planner = scheduler.New(scheduler.WithOptimizer(optimizer))
+			plannerOptions = append(plannerOptions, scheduler.WithOptimizer(optimizer))
 			log.Printf("MILP optimizer enabled with %s", cfg.optimizerScript)
 		}
 	}
+	if cfg.networkValidationEnabled {
+		validator, validatorErr := scheduler.NewPythonNetworkValidator(cfg.optimizerPython, cfg.networkValidationScript, cfg.networkValidationTimeout)
+		if validatorErr != nil {
+			log.Printf("AC network validator configuration failed; plans will omit network validation: %v", validatorErr)
+		} else {
+			plannerOptions = append(plannerOptions, scheduler.WithNetworkValidator(validator))
+			log.Printf("AC network validator enabled with %s", cfg.networkValidationScript)
+		}
+	}
+	planner := scheduler.New(plannerOptions...)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.port,
@@ -140,11 +153,28 @@ func loadConfig() config {
 		}
 		optimizerTimeout = parsed
 	}
+	networkValidationEnabled := optimizerEnabled && !strings.EqualFold(strings.TrimSpace(os.Getenv("AC_VALIDATION_ENABLED")), "false")
+	networkValidationScript := strings.TrimSpace(os.Getenv("AC_VALIDATION_SCRIPT_PATH"))
+	if networkValidationScript == "" {
+		networkValidationScript = "optimizer/validate_ac.py"
+	}
+	// Local cold-start validation takes about five seconds including the Python
+	// and pandapower imports. Leave headroom for a smaller VPS.
+	networkValidationTimeout := 12 * time.Second
+	if value := strings.TrimSpace(os.Getenv("AC_VALIDATION_TIMEOUT")); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			log.Fatalf("AC_VALIDATION_TIMEOUT must be a positive duration")
+		}
+		networkValidationTimeout = parsed
+	}
 
 	return config{
 		port: port, databasePath: databasePath, allowedOrigins: allowedOrigins,
 		optimizerEnabled: optimizerEnabled, optimizerPython: optimizerPython,
 		optimizerScript: optimizerScript, optimizerTimeout: optimizerTimeout,
+		networkValidationEnabled: networkValidationEnabled, networkValidationScript: networkValidationScript,
+		networkValidationTimeout: networkValidationTimeout,
 	}
 }
 

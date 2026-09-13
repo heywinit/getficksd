@@ -2,7 +2,7 @@
 name = "wattson-optimizer"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["highspy==1.11.0", "pyomo==6.9.4"]
+dependencies = ["highspy==1.11.0", "pandapower>=3.2,<4", "pyomo==6.9.4"]
 
 [dependency-groups]
 dev = ["pytest==8.4.2"]

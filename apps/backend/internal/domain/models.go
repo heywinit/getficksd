@@ -313,21 +313,67 @@ type OptimizationInfo struct {
 	FallbackReason string  `json:"fallback_reason,omitempty"`
 }
 
+type NetworkValidationStatus string
+
+const (
+	NetworkValidationPass        NetworkValidationStatus = "pass"
+	NetworkValidationViolations  NetworkValidationStatus = "violations"
+	NetworkValidationUnavailable NetworkValidationStatus = "unavailable"
+)
+
+type NetworkViolation struct {
+	IntervalIndex int     `json:"interval_index"`
+	Kind          string  `json:"kind"`
+	ElementID     string  `json:"element_id,omitempty"`
+	Value         float64 `json:"value"`
+	Limit         float64 `json:"limit"`
+	Message       string  `json:"message"`
+}
+
+// NetworkValidation records an optional, post-dispatch AC power-flow check.
+// Source and assumptions make synthetic electrical parameters explicit so the
+// result cannot be mistaken for validation against measured field data.
+type NetworkValidation struct {
+	Engine                    string                  `json:"engine"`
+	ModelName                 string                  `json:"model_name"`
+	Status                    NetworkValidationStatus `json:"status"`
+	Source                    string                  `json:"source"`
+	Assumptions               []string                `json:"assumptions"`
+	CheckedIntervals          int                     `json:"checked_intervals"`
+	ConvergedIntervals        int                     `json:"converged_intervals"`
+	CheckedBuses              int                     `json:"checked_buses"`
+	CheckedLines              int                     `json:"checked_lines"`
+	ComponentsChecked         int                     `json:"components_checked"`
+	MinimumVoltagePU          float64                 `json:"min_voltage_pu"`
+	MinimumVoltageBusID       string                  `json:"min_voltage_bus_id,omitempty"`
+	MinimumVoltageInterval    int                     `json:"min_voltage_interval"`
+	MaximumVoltagePU          float64                 `json:"max_voltage_pu"`
+	MaximumLineLoadingPercent float64                 `json:"max_line_loading_percent"`
+	MaximumLoadedLineID       string                  `json:"max_loaded_line_id,omitempty"`
+	MaximumLineLoadInterval   int                     `json:"max_line_loading_interval"`
+	CalculatedLossKWH         float64                 `json:"calculated_loss_kwh"`
+	AssumedLossKWH            float64                 `json:"assumed_loss_kwh"`
+	ValidationMS              int64                   `json:"validation_ms"`
+	Violations                []NetworkViolation      `json:"violations"`
+	Error                     string                  `json:"error,omitempty"`
+}
+
 type PlanRun struct {
-	ID               string            `json:"id"`
-	ScenarioID       string            `json:"scenario_id"`
-	ScenarioRevision int               `json:"scenario_revision"`
-	ScenarioHash     string            `json:"scenario_snapshot_hash"`
-	ParentRunID      string            `json:"parent_run_id,omitempty"`
-	Planner          Planner           `json:"planner"`
-	Status           PlanStatus        `json:"status"`
-	CreatedAt        time.Time         `json:"created_at"`
-	ActiveEventIDs   []string          `json:"active_event_ids"`
-	Intervals        []PlanInterval    `json:"intervals"`
-	ContractOutcomes []ContractOutcome `json:"contract_outcomes"`
-	Decisions        []Decision        `json:"decisions"`
-	Summary          PlanSummary       `json:"summary"`
-	Optimization     *OptimizationInfo `json:"optimization,omitempty"`
+	ID                string             `json:"id"`
+	ScenarioID        string             `json:"scenario_id"`
+	ScenarioRevision  int                `json:"scenario_revision"`
+	ScenarioHash      string             `json:"scenario_snapshot_hash"`
+	ParentRunID       string             `json:"parent_run_id,omitempty"`
+	Planner           Planner            `json:"planner"`
+	Status            PlanStatus         `json:"status"`
+	CreatedAt         time.Time          `json:"created_at"`
+	ActiveEventIDs    []string           `json:"active_event_ids"`
+	Intervals         []PlanInterval     `json:"intervals"`
+	ContractOutcomes  []ContractOutcome  `json:"contract_outcomes"`
+	Decisions         []Decision         `json:"decisions"`
+	Summary           PlanSummary        `json:"summary"`
+	Optimization      *OptimizationInfo  `json:"optimization,omitempty"`
+	NetworkValidation *NetworkValidation `json:"network_validation,omitempty"`
 }
 
 type ForecastCacheStatus string

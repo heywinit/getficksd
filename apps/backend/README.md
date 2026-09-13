@@ -64,6 +64,9 @@ sqlc generate
 - `MILP_PYTHON_PATH` sets the optimizer Python executable. Its default value is `optimizer/.venv/bin/python`.
 - `MILP_SCRIPT_PATH` sets the optimizer entrypoint. Its default value is `optimizer/solve.py`.
 - `MILP_TIMEOUT` sets the process timeout. Its default value is `8s`.
+- `AC_VALIDATION_ENABLED=false` disables post-plan AC power-flow validation.
+- `AC_VALIDATION_SCRIPT_PATH` sets the validator entrypoint. Its default value is `optimizer/validate_ac.py`.
+- `AC_VALIDATION_TIMEOUT` sets the validator process timeout. Its default value is `12s`.
 
 Install the optimizer environment:
 
@@ -73,6 +76,7 @@ uv sync --python 3.13
 ```
 
 The `baseline` planner uses the deterministic scheduler. The `wattson` planner uses the MILP first and falls back if the solver fails verification.
+Successful MILP plans can also include an optional `network_validation` result from pandapower. The result labels whether its electrical parameters are synthetic defaults or supplied network data. A validator error never discards an otherwise valid dispatch plan; the run records the validation as unavailable instead.
 
 ## VPS build
 
