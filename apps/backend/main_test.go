@@ -150,7 +150,7 @@ func TestListScenarios(t *testing.T) {
 		t.Fatalf("unexpected scenarios: %#v", scenarios)
 	}
 	for _, scenario := range scenarios {
-		if scenario.Revision != 1 || scenario.ContractCount != 7 || scenario.EventCount != 3 {
+		if scenario.Revision != 2 || scenario.ContractCount != 7 || scenario.EventCount != 3 {
 			t.Fatalf("unexpected scenario summary: %#v", scenario)
 		}
 	}
@@ -174,7 +174,7 @@ func TestReplaceConnectionsPersistsGraphAndIncrementsRevision(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode updated scenario: %v", err)
 	}
-	if updated.Revision != 2 || len(updated.Site.Connections) != 3 {
+	if updated.Revision != 3 || len(updated.Site.Connections) != 3 {
 		t.Fatalf("unexpected connection update: %#v", updated.Site.Connections)
 	}
 
@@ -182,7 +182,7 @@ func TestReplaceConnectionsPersistsGraphAndIncrementsRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load updated scenario: %v", err)
 	}
-	if stored.Revision != 2 || len(stored.Site.Connections) != 3 || stored.Site.Connections[0].ID != "solar-battery" {
+	if stored.Revision != 3 || len(stored.Site.Connections) != 3 || stored.Site.Connections[0].ID != "solar-battery" {
 		t.Fatalf("connection graph was not persisted: %#v", stored.Site.Connections)
 	}
 }
@@ -201,8 +201,8 @@ func TestReplaceConnectionsRejectsInvalidGraphWithoutIncrement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load unchanged scenario: %v", err)
 	}
-	if stored.Revision != 1 {
-		t.Fatalf("expected revision 1 after rejected update, got %d", stored.Revision)
+	if stored.Revision != 2 {
+		t.Fatalf("expected revision 2 after rejected update, got %d", stored.Revision)
 	}
 }
 

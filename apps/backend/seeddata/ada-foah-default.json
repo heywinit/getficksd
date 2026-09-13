@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "revision": 1,
+  "revision": 2,
   "id": "ada-foah-community-v1",
   "name": "Ada Foah coastal operations",
   "description": "A full operating day for homes, health care, fishing, water, communications, and cold storage during a coastal storm.",

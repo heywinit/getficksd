@@ -82,7 +82,7 @@ func spitiValleyScenario() domain.Scenario {
 
 	return domain.Scenario{
 		SchemaVersion: "1",
-		Revision:      1,
+		Revision:      2,
 		ID:            "spiti-valley-community-v2",
 		Name:          "Spiti Valley community operations",
 		Description:   "A full operating day for village homes, health care, communications, water, education, businesses, lighting, and food storage during an autumn supply disruption.",

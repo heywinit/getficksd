@@ -46,7 +46,7 @@ func TestSiteEndpointsUsePersistedScenario(t *testing.T) {
 	if err := json.NewDecoder(detailResponse.Body).Decode(&overview); err != nil {
 		t.Fatalf("decode site: %v", err)
 	}
-	if overview.Site.ID != "spiti-valley" || len(overview.Site.Assets) == 0 || overview.CurrentScenario.Revision != 1 {
+	if overview.Site.ID != "spiti-valley" || len(overview.Site.Assets) == 0 || overview.CurrentScenario.Revision != 2 {
 		t.Fatalf("unexpected overview: %#v", overview)
 	}
 }

@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "revision": 1,
+  "revision": 2,
   "id": "spiti-valley-community-v2",
   "name": "Spiti Valley community operations",
   "description": "A full operating day for village homes, health care, communications, water, education, businesses, lighting, and food storage during an autumn supply disruption.",

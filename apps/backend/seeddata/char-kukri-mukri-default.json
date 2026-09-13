@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "revision": 1,
+  "revision": 2,
   "id": "char-kukri-mukri-community-v1",
   "name": "Char Kukri Mukri island operations",
   "description": "A full operating day for island homes, health care, water, communications, markets, and shelters during severe monsoon weather.",
