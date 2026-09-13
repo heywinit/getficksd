@@ -321,6 +321,37 @@ export type PlanRun = {
     used_fallback: boolean;
     fallback_reason?: string;
   };
+  network_validation?: {
+    engine: string;
+    model_name: string;
+    status: "pass" | "violations" | "unavailable";
+    source: string;
+    assumptions: string[];
+    checked_intervals: number;
+    converged_intervals: number;
+    checked_buses: number;
+    checked_lines: number;
+    components_checked: number;
+    min_voltage_pu: number;
+    min_voltage_bus_id?: string;
+    min_voltage_interval: number;
+    max_voltage_pu: number;
+    max_line_loading_percent: number;
+    max_loaded_line_id?: string;
+    max_line_loading_interval: number;
+    assumed_loss_kwh: number;
+    calculated_loss_kwh: number;
+    validation_ms: number;
+    violations: Array<{
+      interval_index: number;
+      kind: string;
+      element_id?: string;
+      value: number;
+      limit: number;
+      message: string;
+    }>;
+    error?: string;
+  };
   comparison?: PlanComparison;
 };
 

@@ -14,6 +14,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { AppHeader } from "@/components/app-header";
+import { NetworkValidationPanel } from "@/components/network-validation";
 import { OperationsAnalytics } from "@/components/operations-analytics";
 import { PlanBrief } from "@/components/plan-brief";
 import { ReplayNotifications } from "@/components/replay-notifications";
@@ -336,6 +337,12 @@ function HomeComponent() {
           scenario={scenarioQuery.data}
           run={latestRun}
           currentHour={currentHour}
+        />
+        <NetworkValidationPanel
+          scenario={scenarioQuery.data}
+          run={latestRun}
+          isRecalculating={planMutation.isPending}
+          onRecalculate={() => planMutation.mutate()}
         />
         <ContractsWorkspace scenario={scenarioQuery.data} run={latestRun} />
         <PlanComparisonPanel scenario={scenarioQuery.data} run={latestRun} />
